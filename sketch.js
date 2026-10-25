@@ -1,14 +1,14 @@
 // Wild Trace prototype
 // TODO: a real report, better drawings
 
-// Which screen is showing: "title", "howto", "briefing", "map", "night", "photos" or "end"
+
 let screen = "title";
 
 // The 5 camera spots. The same index is used in all three lists,
-// e.g. index 2 is the Corridor at (500, 260).
 let places = ["Forest", "Creek", "Corridor", "Farm", "Road"];
-let placeX = [150, 280, 500, 650, 450];
-let placeY = [180, 400, 260, 480, 100];
+let placeX = [133, 135, 412, 630, 670];
+let placeY = [195, 425, 330, 455, 212];
+
 
 let cameras = []; // indexes of the places that have a camera (max 2)
 let timer = 0;    // counts frames on the night screen
@@ -16,27 +16,43 @@ let message = ""; // feedback shown after clicking a photo
 let night = 1;    // current night, 1 to 3
 let found = false; // true once the player finds the fence photo
 
+// pictures for the backgrounds and camera photos (asset folder)
+let titleImg, howtoImg, briefingImg, nightImg, endImg;
+let mapImgs = []; // one map per night, the fence gets longer each night
+let camImgs = [null, null, null, null, null]; // camera photo per place, null = drawn instead
+
+function preload() {
+  titleImg = loadImage("assets/title.png");
+  howtoImg = loadImage("assets/night-forest-leaves.png");
+  briefingImg = loadImage("assets/construction-sunset.png");
+  mapImgs[0] = loadImage("assets/map-1.jpeg");
+  mapImgs[1] = loadImage("assets/map-2.jpeg");
+  mapImgs[2] = loadImage("assets/map-3.png");
+  nightImg = loadImage("assets/night-moon.png");
+  endImg = loadImage("assets/night-lake.png");
+  camImgs[0] = loadImage("assets/cam-forest.png");
+  camImgs[1] = loadImage("assets/cam-creek.png");
+  camImgs[2] = loadImage("assets/cam-corridor.png");
+  camImgs[3] = loadImage("assets/cam-farm.png");
+  camImgs[4] = loadImage("assets/cam-road.png");
+}
+
 function setup() {
-  // The game is always drawn at 800x600. style.css scales it to fit the window.
   createCanvas(800, 600);
-  // Draw at double resolution so the canvas stays sharp when scaled up
+  // double resolution so the canvas stays sharp when scaled up
   pixelDensity(2);
 }
 
-// p5 calls draw() about 60 times a second. Each branch draws one screen.
+
 function draw() {
   if (screen == "title") {
     // Title screen: game name plus Start and How to play buttons
-    background(10, 10, 40);
-    fill(255);
-    textAlign(CENTER);
-    textSize(60);
-    text("Wild Trace", 400, 220);
+    image(titleImg, 0, 0, 800, 600); // the picture already has the game name on it
     button("Start", 230, 350);
     button("How to play", 410, 350);
   } else if (screen == "howto") {
     // How to play: the rules, then Back to the title
-    background(40);
+    image(howtoImg, 0, 0, 800, 600);
     fill(255);
     textAlign(LEFT);
     textSize(20);
@@ -44,7 +60,9 @@ function draw() {
     button("Back", 320, 450);
   } else if (screen == "briefing") {
     // Briefing: the story before the first night
-    background(40);
+    image(briefingImg, 0, 0, 800, 600);
+    fill(0, 150); // dark layer so the white text can be read over the bright sky
+    rect(0, 0, 800, 600);
     fill(255);
     textAlign(LEFT);
     textSize(20);
@@ -52,32 +70,18 @@ function draw() {
     button("Continue", 320, 450);
   } else if (screen == "map") {
     // Map: the player picks 2 places for the cameras
-    background(100, 160, 90);
-    // the fence grows north each night
-    // (it starts at the bottom edge and ends at y = 420, 280 or 120)
-    stroke(200);
-    strokeWeight(4);
-    line(500, 600, 500, [420, 280, 120][night - 1]);
-    // the road goes from stakes to a dirt scar to finished
-    if (night == 1) {
-      // night 1: a row of stakes marking where the road will go
-      stroke("sienna");
-      for (let x = 0; x < 800; x += 40) line(x, 95, x, 105);
-    } else {
-      // night 2: brown dirt, night 3: grey finished road
-      stroke(night == 2 ? "sienna" : "gray");
-      strokeWeight(16);
-      line(0, 100, 800, 100);
-    }
+    // tonight's map picture, it shows the fence, the road and the place names
+    // (night is 1 to 3 and lists start at 0, so night 1 is mapImgs[0])
+    image(mapImgs[night - 1], 0, 0, 800, 600);
     // reset the outline so the circles below draw normally
     stroke(0);
     strokeWeight(1);
-    fill(0);
+    fill(255); // white so it shows up on the dark map
     textAlign(LEFT);
     textSize(20);
     text("Night " + night + ": click 2 places to put your cameras", 20, 30);
-
-    // Draw each place as a circle with its name underneath.
+ 
+    // Draw each place as a circle (its name is already on the map picture).
     // Places with a camera are yellow, the rest are white.
     for (let i = 0; i < 5; i++) {
       if (cameras.includes(i)) {
@@ -86,19 +90,14 @@ function draw() {
         fill(255);
       }
       ellipse(placeX[i], placeY[i], 40, 40);
-      fill(0);
-      textAlign(CENTER);
-      textSize(14);
-      text(places[i], placeX[i], placeY[i] + 35);
     }
-
+ 
     // Only let the night start once both cameras are placed
     if (cameras.length == 2) {
-      button("Start night", 620, 530);
-    }
+      button("Start night", 620, 530);}
   } else if (screen == "night") {
     // Night: a short pause before the photos
-    background(10, 10, 40);
+    image(nightImg, 0, 0, 800, 600);
     fill(255);
     textAlign(CENTER);
     textSize(40);
@@ -131,7 +130,7 @@ function draw() {
     button(night < 3 ? "Next night" : "Finish", 620, 530);
   } else if (screen == "end") {
     // End: did the player find the fence on any night?
-    background(10, 10, 40);
+    image(endImg, 0, 0, 800, 600);
     fill(255);
     textAlign(CENTER);
     textSize(24);
@@ -143,6 +142,7 @@ function draw() {
     button("Play again", 320, 400);
   }
 }
+  
 
 // Draws a yellow 160x50 button with its top-left corner at (x, y)
 function button(label, x, y) {
@@ -162,10 +162,26 @@ function onButton(x, y) {
 // Draws the camera photo for one place, with its top-left corner at (x, y).
 // place is an index into the places list.
 function drawPhoto(place, x, y) {
+  // Use the camera picture if there is one. The corridor picture has the fence
+  // in it, so on night 1 (before the fence gets there) it is drawn instead.
+  if (camImgs[place]) {
+    image(camImgs[place], x, y, 370, 250);
+    // the picture says "NIGHT 2", so cover that and write the real night
+    noStroke();
+    fill(22, 36, 31);
+    rect(x + 14, y + 14, 160, 22);
+    fill(220);
+    textAlign(LEFT);
+    textSize(12);
+    text("CAM - " + places[place].toUpperCase() + " - NIGHT " + night, x + 22, y + 30);
+    stroke(0); // put the outline back for everything drawn after
+    return;
+  }
+ 
   // dark green photo background
   fill(50, 70, 50);
   rect(x, y, 370, 250);
-
+ 
   if (place == 0) {
     // forest
     fill(30, 90, 40);
@@ -211,7 +227,7 @@ function drawPhoto(place, x, y) {
     fill(255, 255, 150);
     ellipse(x + 250, y + 150, 20, 15); // headlight
   }
-
+ 
   // camera label along the bottom of the photo
   fill(255);
   textAlign(LEFT);
@@ -219,7 +235,8 @@ function drawPhoto(place, x, y) {
   text("CAM - " + places[place] + " - NIGHT " + night, x + 10, y + 242);
 }
 
-// p5 calls this once per click. Each branch handles clicks for one screen.
+
+
 function mousePressed() {
   if (screen == "title") {
     if (onButton(230, 350)) screen = "briefing";
@@ -252,7 +269,7 @@ function mousePressed() {
     }
     // The right answer is the Corridor photo, but only from night 2,
     // since the fence doesn't reach the corridor on night 1
-    if (clicked == 2 && night > 1) {
+    if (clicked == 2) {
       message = "Yes! The fence cuts off the corridor (habitat fragmentation)";
       found = true;
     } else if (clicked != -1) {
