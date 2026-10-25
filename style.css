@@ -1,0 +1,24 @@
+/* Remove the browser's default spacing, use a dark background,
+   and make the page fill the whole window */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #111;
+  height: 100%;
+}
+
+/* Centre the canvas in the window, both across and down */
+main {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Scale the 800x600 canvas as large as it can go while keeping its 4:3 shape.
+   133.33vh is 4/3 of the window height, and 75vw is 3/4 of the window width.
+   !important is needed to override the size p5 sets on the canvas. */
+canvas {
+  width: min(100vw, 133.33vh) !important;
+  height: min(75vw, 100vh) !important;
+}
