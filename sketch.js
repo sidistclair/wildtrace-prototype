@@ -11,7 +11,9 @@ let placeX = [176, 314, 563, 692, 486];
 let placeY = [204, 378, 252, 468, 96];
 // Names used in the photo files, e.g. assets/photos/N2-corridor-frame-1.jpg
 let ids = ["forest", "creek", "corridor", "farm", "ridge"];
-let photos = {}; // photos[night][place] is that place's photo on that night
+let photos = {}; // photos[night][place][frame] is one frame from that place on that night
+// How many frames each camera took: frameCounts[night - 1][place]
+let frameCounts = [[2, 2, 2, 1, 1], [1, 2, 2, 2, 2], [2, 2, 2, 2, 1]];
 
 // Other artwork, loaded in setup()
 let maps = {};      // maps[night] is the painted reserve map for that night
@@ -26,6 +28,11 @@ let message = ""; // feedback shown after clicking a photo
 let night = 1;    // current night, 1 to 3
 let clues = [];   // the clues the player has found so far
 let showOld = false; // true while Dr. Okafor's old photos are showing
+let frame = [0, 0];  // which frame each camera's photo is on
+let magnify = false; // true while the magnifier is on
+let lens = null;     // the photo under the mouse, for the magnifier
+let pins = [];       // pinned photos, each { pic, label }
+let chosen = [];     // which pins (up to 2) are being compared
 
 // Dr. Okafor's old photos to compare with yours: old[place], or null if that place has none
 let old = [
@@ -50,14 +57,14 @@ let events = [
   ],
   [ // night 2
     { time: "21:48", note: "The doe and her fawn again.", clue: "" },
-    { time: "20:30", note: "No animals, but there is a wire snare set on the path to the water.", clue: "Someone has set a snare by the creek." },
+    { time: "20:30", note: "No animals, but there is a wire snare set on the path to the water. Later the doe and her fawn walk right past it.", clue: "Someone has set a snare by the creek." },
     { time: "00:30", note: "A badger reaches the half-built fence and has to turn back.", clue: "The new fence is cutting off the wildlife corridor." },
     { time: "02:31", note: "The fox from the forest, white-tipped tail and all, is raiding the farm's bins.", clue: "The forest fox has been pushed out to the farm." },
-    { time: "23:50", note: "A dark pickup with a roof light bar and a dented tailgate drives the new road at night.", clue: "A mystery pickup is using the new road at night." },
+    { time: "23:50", note: "A dark pickup with a roof light bar and a dented tailgate drives the new road at night. Two hours later a gloved hand grabs the camera.", clue: "A mystery pickup is using the new road at night, and someone tampered with the camera." },
   ],
   [ // night 3
     { time: "03:00", note: "Nothing. The forest is empty tonight.", clue: "" },
-    { time: "04:05", note: "A person with a headlamp and a bright stripe on their sleeve kneels at the snare.", clue: "A hunter with a headlamp is checking the snare." },
+    { time: "04:05", note: "A person with a headlamp and a bright stripe on their sleeve kneels at the snare. Fifteen minutes later the snare is gone, leaving only holes.", clue: "A hunter with a headlamp is checking the snare." },
     { time: "23:10", note: "The doe and her fawn reach the finished fence and can't get through.", clue: "The finished fence stops the doe and fawn using the corridor." },
     { time: "03:30", note: "The doe and her fawn from the reserve are eating the farm's crops.", clue: "The doe and fawn have been pushed out to the farm." },
     { time: "04:20", note: "The same dark pickup, seen from behind. The plate reads K7R-418.", clue: "The pickup is back, and its plate is K7R-418." },
@@ -69,11 +76,14 @@ function setup() {
   createCanvas(800, 600);
   // Draw at double resolution so the canvas stays sharp when scaled up
   pixelDensity(2);
-  // Load the photo of every place on every night (15 in total)
+  // Load every frame from every place on every night (15 scenes in total)
   for (let n = 1; n <= 3; n++) {
     photos[n] = [];
     for (let i = 0; i < 5; i++) {
-      photos[n][i] = loadPic("assets/photos/N" + n + "-" + ids[i] + "-frame-1.jpg", 800, 500);
+      photos[n][i] = [];
+      for (let f = 1; f <= frameCounts[n - 1][i]; f++) {
+        photos[n][i].push(loadPic("assets/photos/N" + n + "-" + ids[i] + "-frame-" + f + ".jpg", 800, 500));
+      }
     }
   }
   // Load Dr. Okafor's old photos
@@ -98,6 +108,8 @@ function setup() {
 
 // p5 calls draw() about 60 times a second. Each branch draws one screen.
 function draw() {
+  // No outlines unless a shape asks for one (p5 would also outline text otherwise)
+  noStroke();
   if (screen == "title") {
     // Title screen: game name plus Start and How to play buttons.
     // The 1920x1080 painting is cropped to the middle 1440x1080 so it fills the 4:3 canvas.
@@ -110,7 +122,7 @@ function draw() {
     button("How to play", 410, 350);
   } else if (screen == "howto") {
     // How to play: the rules, then Back to the title
-    drawNotebook("1. Click 2 places on the map to put your cameras.\n2. Start the night and wait for the photos.\n3. Click the photo that shows what's wrong.\n4. You have 3 nights, and you can move your cameras each night.");
+    drawNotebook("1. Click 2 places on the map to put your cameras.\n2. Start the night and wait for the photos.\n3. Click the photo that shows what's wrong.\n4. Use Pin, Next frame and the Magnifier to look closer.\n5. You have 3 nights, and you can move your cameras each night.");
     button("Back", 320, 450);
   } else if (screen == "briefing") {
     // Briefing: the story before the first night
@@ -122,7 +134,6 @@ function draw() {
     // The 1720x1200 map is cropped by 60 pixels on each side so it fits the 4:3 canvas.
     image(maps[night], 0, 0, 800, 600, 60, 0, 1600, 1200);
     // dark strip behind the instructions
-    noStroke();
     fill(0, 160);
     rect(0, 0, 800, 45);
     fill(255);
@@ -147,8 +158,7 @@ function draw() {
       textSize(14);
       text(places[i], placeX[i], placeY[i] + 38);
     }
-    stroke(0);
-    strokeWeight(1);
+    noStroke();
 
     // Only let the night start once both cameras are placed
     if (cameras.length == 2) {
@@ -165,6 +175,7 @@ function draw() {
     timer++;
     if (timer > 120) {
       timer = 0; // reset so the next night waits too
+      frame = [0, 0];
       screen = "photos";
     }
   } else if (screen == "photos") {
@@ -174,13 +185,18 @@ function draw() {
     textAlign(LEFT);
     textSize(18);
     text("Click a photo if you think it shows something wrong in the reserve.", 20, 40);
-    drawPhoto(cameras[0], 20, 100);
-    drawPhoto(cameras[1], 410, 100);
-    // Feedback from the last photo the player clicked, wrapped inside a 720x100 box
+    for (let k = 0; k < 2; k++) {
+      let x = 20 + k * 390;
+      drawPhoto(shown(k), x, 100);
+      // Pin under every photo, and Next frame if that camera took more than one
+      button("Pin", x, 340, 80);
+      if (hasFrames(k)) button("Next frame", x + 90, 340, 130);
+    }
+    // Feedback from the last photo the player clicked, wrapped inside a 720x80 box
     fill(255);
     textAlign(CENTER);
     textSize(18);
-    text(message, 40, 360, 720, 100);
+    text(message, 40, 400, 720, 80);
     // Hint so the player isn't stuck when neither camera caught anything
     let tonight = events[night - 1];
     if (!tonight[cameras[0]].clue && !tonight[cameras[1]].clue) {
@@ -191,6 +207,8 @@ function draw() {
     if (old[cameras[0]] || old[cameras[1]]) {
       button(showOld ? "Tonight's photos" : "Old photos", 20, 530);
     }
+    button(magnify ? "Stop zoom" : "Magnifier", 190, 530, 130);
+    if (pins.length > 0) button("Pinned (" + pins.length + ")", 330, 530, 130);
     // After the last night the button goes to the end screen instead
     button(night < 3 ? "Next night" : "Finish", 620, 530);
   } else if (screen == "end") {
@@ -206,17 +224,46 @@ function draw() {
       text("- " + clues[i], 100, 150 + i * 30);
     }
     button("Play again", 320, 500);
+  } else if (screen == "pins") {
+    // Pinned photos: pick two to compare side by side
+    background(40);
+    fill(255);
+    textAlign(LEFT);
+    textSize(18);
+    text("Click two pinned photos to compare them side by side.", 20, 40);
+    for (let k = 0; k < chosen.length; k++) {
+      drawPhoto(pins[chosen[k]], 20 + k * 390, 70);
+    }
+    // small copies of every pinned photo, 6 to a row; the chosen ones get a yellow border
+    for (let i = 0; i < pins.length; i++) {
+      let x = 20 + (i % 6) * 130;
+      let y = 330 + floor(i / 6) * 90;
+      image(pins[i].pic, x, y, 120, 75);
+      if (chosen.includes(i)) {
+        noFill();
+        stroke(255, 200, 0);
+        strokeWeight(3);
+        rect(x, y, 120, 75);
+        noStroke();
+      }
+    }
+    button(magnify ? "Stop zoom" : "Magnifier", 190, 530, 130);
+    button("Back", 620, 530);
   }
+
+  // The magnifier is drawn last so it sits on top of everything
+  if (lens) drawLens();
+  lens = null;
 }
 
-// Draws a yellow 160x50 button with its top-left corner at (x, y)
-function button(label, x, y) {
+// Draws a yellow button, 160 wide (or w wide) and 50 tall, with its top-left corner at (x, y)
+function button(label, x, y, w = 160) {
   fill(255, 200, 0);
-  rect(x, y, 160, 50);
+  rect(x, y, w, 50);
   fill(0);
   textAlign(CENTER);
   textSize(20);
-  text(label, x + 80, y + 32);
+  text(label, x + w / 2, y + 32);
 }
 
 // Draws the top of the notebook page as the background, with text written on its lines
@@ -231,8 +278,8 @@ function drawNotebook(words) {
 }
 
 // True if the mouse is inside the button drawn at (x, y)
-function onButton(x, y) {
-  return mouseX > x && mouseX < x + 160 && mouseY > y && mouseY < y + 50;
+function onButton(x, y, w = 160) {
+  return mouseX > x && mouseX < x + w && mouseY > y && mouseY < y + 50;
 }
 
 // Loads a picture through an <img> tag rather than loadImage(),
@@ -246,26 +293,59 @@ function loadPic(path, w, h) {
   return pic;
 }
 
-// Draws the photo for one place on the current night, with its top-left corner at (x, y).
-// The photos are 800x500 and are shown here at 370x231.
+// The picture and label for camera k (0 or 1) as it is currently shown.
 // While showOld is on, places that have one show Dr. Okafor's old photo instead.
-function drawPhoto(place, x, y) {
-  let showingOld = showOld && old[place];
-  image(showingOld ? old[place].pic : photos[night][place], x, y, 370, 231);
+function shown(k) {
+  let place = cameras[k];
+  if (showOld && old[place]) {
+    return { pic: old[place].pic, label: "DR. OKAFOR - " + places[place] + " - " + old[place].when };
+  }
+  let frames = photos[night][place];
+  return {
+    pic: frames[frame[k]],
+    label: "CAM - " + places[place] + " - NIGHT " + night + " - " + events[night - 1][place].time + " - FRAME " + (frame[k] + 1) + "/" + frames.length,
+  };
+}
+
+// True if camera k is showing tonight's photo and took more than one frame
+function hasFrames(k) {
+  return !(showOld && old[cameras[k]]) && photos[night][cameras[k]].length > 1;
+}
+
+// Draws a photo ({ pic, label }) with its top-left corner at (x, y).
+// The photos are 800x500 and are shown here at 370x231.
+function drawPhoto(photo, x, y) {
+  image(photo.pic, x, y, 370, 231);
   // a random part of the grain, so it flickers like a night-vision camera
   image(grain, x, y, 370, 231, random(370), random(231), 370, 231);
+  // remember the photo under the mouse so the magnifier can zoom into it
+  if (magnify && mouseX > x && mouseX < x + 370 && mouseY > y && mouseY < y + 231) {
+    lens = { pic: photo.pic, x: x, y: y };
+  }
 
-  // camera label in a dark strip along the bottom of the photo
+  // label in a dark strip along the bottom of the photo
   fill(0, 150);
   rect(x, y + 211, 370, 20);
   fill(255);
   textAlign(LEFT);
   textSize(12);
-  if (showingOld) {
-    text("DR. OKAFOR - " + places[place] + " - " + old[place].when, x + 10, y + 226);
-  } else {
-    text("CAM - " + places[place] + " - NIGHT " + night + " - " + events[night - 1][place].time, x + 10, y + 226);
-  }
+  text(photo.label, x + 10, y + 226);
+}
+
+// Draws a 160x160 magnifier at the mouse, showing the photo under it 2.5 times bigger.
+// It zooms into the full-size 800x500 photo, so the detail stays sharp.
+function drawLens() {
+  let scale = 800 / 370; // photo pixels per screen pixel
+  let size = 160;
+  let part = (size / 2.5) * scale; // how much of the photo fits in the magnifier
+  let sx = (mouseX - lens.x) * scale - part / 2;
+  let sy = (mouseY - lens.y) * scale - part / 2;
+  image(lens.pic, mouseX - size / 2, mouseY - size / 2, size, size, sx, sy, part, part);
+  noFill();
+  stroke(255, 200, 0);
+  strokeWeight(3);
+  rect(mouseX - size / 2, mouseY - size / 2, size, size);
+  noStroke();
 }
 
 // p5 calls this once per click. Each branch handles clicks for one screen.
@@ -314,6 +394,20 @@ function mousePressed() {
     if ((old[cameras[0]] || old[cameras[1]]) && onButton(20, 530)) {
       showOld = !showOld;
     }
+    for (let k = 0; k < 2; k++) {
+      let x = 20 + k * 390;
+      // Pin keeps the photo for comparing later (up to 12, and not the same one twice)
+      let photo = shown(k);
+      if (onButton(x, 340, 80) && pins.length < 12 && !pins.some((p) => p.pic == photo.pic)) {
+        pins.push(photo);
+      }
+      // Next frame steps through the frames, going back to the first after the last
+      if (hasFrames(k) && onButton(x + 90, 340, 130)) {
+        frame[k] = (frame[k] + 1) % photos[night][cameras[k]].length;
+      }
+    }
+    if (onButton(190, 530, 130)) magnify = !magnify;
+    if (pins.length > 0 && onButton(330, 530, 130)) screen = "pins";
     // Next night / Finish button. Cameras stay where they were,
     // so the player can move them on the map.
     if (onButton(620, 530)) {
@@ -332,7 +426,27 @@ function mousePressed() {
       night = 1;
       cameras = [];
       clues = [];
+      pins = [];
+      chosen = [];
+      magnify = false;
       screen = "title";
     }
+  } else if (screen == "pins") {
+    // Clicking a small photo chooses it (or un-chooses it).
+    // Choosing a third replaces the one chosen first.
+    for (let i = 0; i < pins.length; i++) {
+      let x = 20 + (i % 6) * 130;
+      let y = 330 + floor(i / 6) * 90;
+      if (mouseX > x && mouseX < x + 120 && mouseY > y && mouseY < y + 75) {
+        if (chosen.includes(i)) {
+          chosen.splice(chosen.indexOf(i), 1);
+        } else {
+          chosen.push(i);
+          if (chosen.length > 2) chosen.shift();
+        }
+      }
+    }
+    if (onButton(190, 530, 130)) magnify = !magnify;
+    if (onButton(620, 530)) screen = "photos";
   }
 }
