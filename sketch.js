@@ -17,7 +17,35 @@ let cameras = []; // indexes of the places that have a camera (max 2)
 let timer = 0;    // counts frames on the night screen
 let message = ""; // feedback shown after clicking a photo
 let night = 1;    // current night, 1 to 3
-let found = false; // true once the player finds the fence photo
+let clues = [];   // the clues the player has found so far
+
+// What each camera sees: events[night - 1][place].
+// note describes the photo. clue is filled in when the photo shows something wrong.
+// The same animals keep coming back: the fox (F1) has a white-tipped tail,
+// and the doe (D2) has a pale mark on her shoulder and a spotted fawn.
+let events = [
+  [ // night 1
+    { time: "22:14", note: "A doe with a pale shoulder mark grazes with her spotted fawn. A fox with a white-tipped tail trots past.", clue: "" },
+    { time: "05:40", note: "An otter by the water, then the doe and her fawn come down to drink.", clue: "" },
+    { time: "01:10", note: "The fox and a badger travel along the corridor. Later a buck walks through.", clue: "" },
+    { time: "23:55", note: "Just the farm dog sniffing around the bins.", clue: "" },
+    { time: "14:20", note: "Daytime. Workers from Ridgeline Developments mark out a road next to their yellow truck.", clue: "A construction crew is marking out a new road on the ridge." },
+  ],
+  [ // night 2
+    { time: "21:48", note: "The doe and her fawn again.", clue: "" },
+    { time: "20:30", note: "No animals, but there is a wire snare set on the path to the water.", clue: "Someone has set a snare by the creek." },
+    { time: "00:30", note: "A badger reaches the half-built fence and has to turn back.", clue: "The new fence is cutting off the wildlife corridor." },
+    { time: "02:31", note: "The fox from the forest, white-tipped tail and all, is raiding the farm's bins.", clue: "The forest fox has been pushed out to the farm." },
+    { time: "23:50", note: "A dark pickup with a roof light bar and a dented tailgate drives the new road at night.", clue: "A mystery pickup is using the new road at night." },
+  ],
+  [ // night 3
+    { time: "03:00", note: "Nothing. The forest is empty tonight.", clue: "" },
+    { time: "04:05", note: "A person with a headlamp and a bright stripe on their sleeve kneels at the snare.", clue: "A hunter with a headlamp is checking the snare." },
+    { time: "23:10", note: "The doe and her fawn reach the finished fence and can't get through.", clue: "The finished fence stops the doe and fawn using the corridor." },
+    { time: "03:30", note: "The doe and her fawn from the reserve are eating the farm's crops.", clue: "The doe and fawn have been pushed out to the farm." },
+    { time: "04:20", note: "The same dark pickup, seen from behind. The plate reads K7R-418.", clue: "The pickup is back, and its plate is K7R-418." },
+  ],
+];
 
 function setup() {
   // The game is always drawn at 800x600. style.css scales it to fit the window.
@@ -125,32 +153,34 @@ function draw() {
     fill(255);
     textAlign(LEFT);
     textSize(18);
-    text("Which photo shows the fence blocking the animals?", 20, 40);
+    text("Click a photo if you think it shows something wrong in the reserve.", 20, 40);
     drawPhoto(cameras[0], 20, 100);
     drawPhoto(cameras[1], 410, 100);
-    // Feedback from the last photo the player clicked
+    // Feedback from the last photo the player clicked, wrapped inside a 720x100 box
     fill(255);
     textAlign(CENTER);
-    textSize(20);
-    text(message, 400, 450);
-    // Hint so the player isn't stuck when no camera can see the fence
-    if (!cameras.includes(2)) {
-      text("Tip: the fence is being built at the Corridor.", 400, 490);
+    textSize(18);
+    text(message, 40, 360, 720, 100);
+    // Hint so the player isn't stuck when neither camera caught anything
+    let tonight = events[night - 1];
+    if (!tonight[cameras[0]].clue && !tonight[cameras[1]].clue) {
+      text("Tip: nothing looks wrong here tonight. Try other places next night.", 400, 490);
     }
     // After the last night the button goes to the end screen instead
     button(night < 3 ? "Next night" : "Finish", 620, 530);
   } else if (screen == "end") {
-    // End: did the player find the fence on any night?
+    // End: list every clue the player found
     background(10, 10, 40);
     fill(255);
     textAlign(CENTER);
     textSize(24);
-    if (found) {
-      text("You proved the fence cut off the corridor!", 400, 250);
-    } else {
-      text("You never caught the fence on camera.", 400, 250);
+    text("You found " + clues.length + " of 9 clues", 400, 100);
+    textAlign(LEFT);
+    textSize(16);
+    for (let i = 0; i < clues.length; i++) {
+      text("- " + clues[i], 100, 150 + i * 30);
     }
-    button("Play again", 320, 400);
+    button("Play again", 320, 500);
   }
 }
 
@@ -191,7 +221,7 @@ function drawPhoto(place, x, y) {
   fill(255);
   textAlign(LEFT);
   textSize(12);
-  text("CAM - " + places[place] + " - NIGHT " + night, x + 10, y + 226);
+  text("CAM - " + places[place] + " - NIGHT " + night + " - " + events[night - 1][place].time, x + 10, y + 226);
 }
 
 // p5 calls this once per click. Each branch handles clicks for one screen.
@@ -225,13 +255,15 @@ function mousePressed() {
       if (mouseX > 20 && mouseX < 390) clicked = cameras[0];
       if (mouseX > 410 && mouseX < 780) clicked = cameras[1];
     }
-    // The right answer is the Corridor photo, but only from night 2,
-    // since the fence doesn't reach the corridor on night 1
-    if (clicked == 2 && night > 1) {
-      message = "Yes! The fence cuts off the corridor (habitat fragmentation)";
-      found = true;
-    } else if (clicked != -1) {
-      message = "Hmm, that photo doesn't show the fence";
+    // Tell the player what the photo shows, and add its clue the first time it is found
+    if (clicked != -1) {
+      let event = events[night - 1][clicked];
+      if (event.clue) {
+        message = "Good eye! " + event.note;
+        if (!clues.includes(event.clue)) clues.push(event.clue);
+      } else {
+        message = "Nothing wrong here. " + event.note;
+      }
     }
     // Next night / Finish button. Cameras stay where they were,
     // so the player can move them on the map.
@@ -246,10 +278,10 @@ function mousePressed() {
     }
   } else if (screen == "end") {
     // Play again: reset everything and go back to the title
-    if (onButton(320, 400)) {
+    if (onButton(320, 500)) {
       night = 1;
       cameras = [];
-      found = false;
+      clues = [];
       screen = "title";
     }
   }
