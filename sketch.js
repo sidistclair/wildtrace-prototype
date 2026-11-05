@@ -332,12 +332,12 @@ function drawPhoto(photo, x, y) {
   text(photo.label, x + 10, y + 226);
 }
 
-// Draws a 160x160 magnifier at the mouse, showing the photo under it 2.5 times bigger.
+// Draws a 160x160 magnifier at the mouse, showing the photo under it 1.75 times bigger.
 // It zooms into the full-size 800x500 photo, so the detail stays sharp.
 function drawLens() {
   let scale = 800 / 370; // photo pixels per screen pixel
   let size = 160;
-  let part = (size / 2.5) * scale; // how much of the photo fits in the magnifier
+  let part = (size / 1.75) * scale; // how much of the photo fits in the magnifier
   let sx = (mouseX - lens.x) * scale - part / 2;
   let sy = (mouseY - lens.y) * scale - part / 2;
   image(lens.pic, mouseX - size / 2, mouseY - size / 2, size, size, sx, sy, part, part);
