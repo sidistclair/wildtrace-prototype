@@ -20,6 +20,7 @@ let maps = {};      // maps[night] is the painted reserve map for that night
 let icons = [];     // icons[place] is the map icon for that place
 let camIcons = [];  // camera 1 and camera 2 icons
 let titlePic, notebook;
+let nightPic, endPic; // Zeina's night-sky paintings for the night and end screens
 let grain;          // night-vision speckles laid over the photos
 
 let cameras = []; // indexes of the places that have a camera (max 2)
@@ -96,6 +97,8 @@ function setup() {
   camIcons = [loadPic("assets/ui/camera-1.png", 96, 80), loadPic("assets/ui/camera-2.png", 96, 80)];
   titlePic = loadPic("assets/screens/title-background.jpg", 1920, 1080);
   notebook = loadPic("assets/screens/notebook-page.png", 800, 1200);
+  nightPic = loadPic("assets/night-moon.png", 504, 323);
+  endPic = loadPic("assets/night-lake.png", 503, 343);
 
   // Night-vision grain: random light and dark speckles. It is twice the size of a photo
   // so drawPhoto() can show a different part of it every frame, which makes it flicker.
@@ -165,8 +168,9 @@ function draw() {
       button("Start night", 620, 530);
     }
   } else if (screen == "night") {
-    // Night: a short pause before the photos
-    background(10, 10, 40);
+    // Night: a short pause before the photos.
+    // The picture is cropped to its middle 431x323 so it fills the 4:3 canvas.
+    image(nightPic, 0, 0, 800, 600, 36, 0, 431, 323);
     fill(255);
     textAlign(CENTER);
     textSize(40);
@@ -212,8 +216,11 @@ function draw() {
     // After the last night the button goes to the end screen instead
     button(night < 3 ? "Next night" : "Finish", 620, 530);
   } else if (screen == "end") {
-    // End: list every clue the player found
-    background(10, 10, 40);
+    // End: list every clue the player found.
+    // The picture is cropped to its middle 457x343, with a dark layer so the text stands out.
+    image(endPic, 0, 0, 800, 600, 23, 0, 457, 343);
+    fill(0, 120);
+    rect(0, 0, 800, 600);
     fill(255);
     textAlign(CENTER);
     textSize(24);
