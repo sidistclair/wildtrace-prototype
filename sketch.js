@@ -1,17 +1,24 @@
 // Wild Trace prototype
-// TODO: a real report, better drawings
+// TODO: a real report
 
 // Which screen is showing: "title", "howto", "briefing", "map", "night", "photos" or "end"
 let screen = "title";
 
 // The 5 camera spots. The same index is used in all three lists,
-// e.g. index 2 is the Corridor at (500, 260).
+// e.g. index 2 is the Corridor at (563, 252) on the map.
 let places = ["Forest", "Creek", "Corridor", "Farm", "Ridge Road"];
-let placeX = [150, 280, 500, 650, 450];
-let placeY = [180, 400, 260, 480, 100];
+let placeX = [176, 314, 563, 692, 486];
+let placeY = [204, 378, 252, 468, 96];
 // Names used in the photo files, e.g. assets/photos/N2-corridor-frame-1.jpg
 let ids = ["forest", "creek", "corridor", "farm", "ridge"];
 let photos = {}; // photos[night][place] is that place's photo on that night
+
+// Other artwork, loaded in setup()
+let maps = {};      // maps[night] is the painted reserve map for that night
+let icons = [];     // icons[place] is the map icon for that place
+let camIcons = [];  // camera 1 and camera 2 icons
+let titlePic, notebook;
+let grain;          // night-vision speckles laid over the photos
 
 let cameras = []; // indexes of the places that have a camera (max 2)
 let timer = 0;    // counts frames on the night screen
@@ -73,13 +80,28 @@ function setup() {
   for (let i = 0; i < 5; i++) {
     if (old[i]) old[i].pic = loadPic("assets/photos/" + old[i].file + "-frame-1.jpg", 800, 500);
   }
+  // Load the maps, icons and screen backgrounds
+  for (let n = 1; n <= 3; n++) maps[n] = loadPic("assets/map/night-" + n + ".jpg", 1720, 1200);
+  for (let i = 0; i < 5; i++) icons[i] = loadPic("assets/ui/" + ids[i] + ".png", 64, 64);
+  camIcons = [loadPic("assets/ui/camera-1.png", 96, 80), loadPic("assets/ui/camera-2.png", 96, 80)];
+  titlePic = loadPic("assets/screens/title-background.jpg", 1920, 1080);
+  notebook = loadPic("assets/screens/notebook-page.png", 800, 1200);
+
+  // Night-vision grain: random light and dark speckles. It is twice the size of a photo
+  // so drawPhoto() can show a different part of it every frame, which makes it flicker.
+  grain = createGraphics(740, 462);
+  for (let i = 0; i < 12000; i++) {
+    grain.stroke(random(255), random(20, 70));
+    grain.point(random(740), random(462));
+  }
 }
 
 // p5 calls draw() about 60 times a second. Each branch draws one screen.
 function draw() {
   if (screen == "title") {
-    // Title screen: game name plus Start and How to play buttons
-    background(10, 10, 40);
+    // Title screen: game name plus Start and How to play buttons.
+    // The 1920x1080 painting is cropped to the middle 1440x1080 so it fills the 4:3 canvas.
+    image(titlePic, 0, 0, 800, 600, 240, 0, 1440, 1080);
     fill(255);
     textAlign(CENTER);
     textSize(60);
@@ -88,61 +110,45 @@ function draw() {
     button("How to play", 410, 350);
   } else if (screen == "howto") {
     // How to play: the rules, then Back to the title
-    background(40);
-    fill(255);
-    textAlign(LEFT);
-    textSize(20);
-    text("1. Click 2 places on the map to put your cameras.\n2. Start the night and wait for the photos.\n3. Click the photo that shows what's wrong.\n4. You have 3 nights, and you can move your cameras each night.", 60, 150);
+    drawNotebook("1. Click 2 places on the map to put your cameras.\n2. Start the night and wait for the photos.\n3. Click the photo that shows what's wrong.\n4. You have 3 nights, and you can move your cameras each night.");
     button("Back", 320, 450);
   } else if (screen == "briefing") {
     // Briefing: the story before the first night
-    background(40);
-    fill(255);
-    textAlign(LEFT);
-    textSize(20);
-    text("Dr. Okafor, the researcher running the wildlife survey, has gone missing.\nA new fence and road are being built through the reserve.\nThe rangers think the animals are in trouble.\nYou have 3 nights to catch the problem on camera.\nCompare your photos with Dr. Okafor's old ones to spot what has changed.", 60, 180);
+    drawNotebook("Dr. Okafor, the researcher running the wildlife survey, has gone missing.\nA new fence and road are being built through the reserve.\nThe rangers think the animals are in trouble.\nYou have 3 nights to catch the problem on camera.\nCompare your photos with Dr. Okafor's old ones to spot what has changed.");
     button("Continue", 320, 450);
   } else if (screen == "map") {
-    // Map: the player picks 2 places for the cameras
-    background(100, 160, 90);
-    // the fence grows north each night
-    // (it starts at the bottom edge and ends at y = 420, 280 or 120)
-    stroke(200);
-    strokeWeight(4);
-    line(500, 600, 500, [420, 280, 120][night - 1]);
-    // the road goes from stakes to a dirt scar to finished
-    if (night == 1) {
-      // night 1: a row of stakes marking where the road will go
-      stroke("sienna");
-      for (let x = 0; x < 800; x += 40) line(x, 95, x, 105);
-    } else {
-      // night 2: brown dirt, night 3: grey finished road
-      stroke(night == 2 ? "sienna" : "gray");
-      strokeWeight(16);
-      line(0, 100, 800, 100);
-    }
-    // reset the outline so the circles below draw normally
-    stroke(0);
-    strokeWeight(1);
-    fill(0);
+    // Map: the player picks 2 places for the cameras.
+    // Each night has its own painted map showing how far the fence and road have got.
+    // The 1720x1200 map is cropped by 60 pixels on each side so it fits the 4:3 canvas.
+    image(maps[night], 0, 0, 800, 600, 60, 0, 1600, 1200);
+    // dark strip behind the instructions
+    noStroke();
+    fill(0, 160);
+    rect(0, 0, 800, 45);
+    fill(255);
     textAlign(LEFT);
     textSize(20);
     text("Night " + night + ": click 2 places to put your cameras", 20, 30);
 
-    // Draw each place as a circle with its name underneath.
-    // Places with a camera are yellow, the rest are white.
+    // Draw each place as its icon with its name underneath.
+    // Places with a camera get a yellow ring and that camera's icon.
     for (let i = 0; i < 5; i++) {
       if (cameras.includes(i)) {
         fill(255, 200, 0);
-      } else {
-        fill(255);
+        ellipse(placeX[i], placeY[i], 52, 52);
+        image(camIcons[cameras.indexOf(i)], placeX[i] + 10, placeY[i] - 45, 48, 40);
       }
-      ellipse(placeX[i], placeY[i], 40, 40);
-      fill(0);
+      image(icons[i], placeX[i] - 20, placeY[i] - 20, 40, 40);
+      // white name with a dark outline so it stands out on the map
+      fill(255);
+      stroke(0);
+      strokeWeight(3);
       textAlign(CENTER);
       textSize(14);
-      text(places[i], placeX[i], placeY[i] + 35);
+      text(places[i], placeX[i], placeY[i] + 38);
     }
+    stroke(0);
+    strokeWeight(1);
 
     // Only let the night start once both cameras are placed
     if (cameras.length == 2) {
@@ -213,6 +219,17 @@ function button(label, x, y) {
   text(label, x + 80, y + 32);
 }
 
+// Draws the top of the notebook page as the background, with text written on its lines
+function drawNotebook(words) {
+  background(30);
+  image(notebook, 40, 20, 720, 560, 40, 40, 720, 560);
+  fill(52, 46, 38);
+  textAlign(LEFT);
+  textSize(18);
+  textLeading(39); // the gap between the page's ruled lines
+  text(words, 150, 155, 590, 290);
+}
+
 // True if the mouse is inside the button drawn at (x, y)
 function onButton(x, y) {
   return mouseX > x && mouseX < x + 160 && mouseY > y && mouseY < y + 50;
@@ -235,6 +252,8 @@ function loadPic(path, w, h) {
 function drawPhoto(place, x, y) {
   let showingOld = showOld && old[place];
   image(showingOld ? old[place].pic : photos[night][place], x, y, 370, 231);
+  // a random part of the grain, so it flickers like a night-vision camera
+  image(grain, x, y, 370, 231, random(370), random(231), 370, 231);
 
   // camera label in a dark strip along the bottom of the photo
   fill(0, 150);
