@@ -6,7 +6,7 @@ let screen = "title";
 
 // The 5 camera spots. The same index is used in all three lists,
 // e.g. index 2 is the Corridor at (500, 260).
-let places = ["Forest", "Creek", "Corridor", "Farm", "Road"];
+let places = ["Forest", "Creek", "Corridor", "Farm", "Ridge Road"];
 let placeX = [150, 280, 500, 650, 450];
 let placeY = [180, 400, 260, 480, 100];
 // Names used in the photo files, e.g. assets/photos/N2-corridor-frame-1.jpg
@@ -18,6 +18,16 @@ let timer = 0;    // counts frames on the night screen
 let message = ""; // feedback shown after clicking a photo
 let night = 1;    // current night, 1 to 3
 let clues = [];   // the clues the player has found so far
+let showOld = false; // true while Dr. Okafor's old photos are showing
+
+// Dr. Okafor's old photos to compare with yours: old[place], or null if that place has none
+let old = [
+  { file: "ARC-1", when: "6 WEEKS AGO", note: "Dr. Okafor's photo: the same fox, back when it lived in the forest." },
+  null,
+  { file: "ARC-2", when: "6 WEEKS AGO", note: "Dr. Okafor's photo: the doe and her fawn walking freely through the corridor, before the fence." },
+  null,
+  { file: "ARC-3", when: "4 WEEKS AGO", note: "Dr. Okafor's photo: the ridge before any road was built." },
+];
 
 // What each camera sees: events[night - 1][place].
 // note describes the photo. clue is filled in when the photo shows something wrong.
@@ -59,6 +69,10 @@ function setup() {
       photos[n][i] = loadPic("assets/photos/N" + n + "-" + ids[i] + "-frame-1.jpg", 800, 500);
     }
   }
+  // Load Dr. Okafor's old photos
+  for (let i = 0; i < 5; i++) {
+    if (old[i]) old[i].pic = loadPic("assets/photos/" + old[i].file + "-frame-1.jpg", 800, 500);
+  }
 }
 
 // p5 calls draw() about 60 times a second. Each branch draws one screen.
@@ -86,7 +100,7 @@ function draw() {
     fill(255);
     textAlign(LEFT);
     textSize(20);
-    text("A new fence and road are being built through the reserve.\nThe rangers think the animals are in trouble.\nYou have 3 nights to catch the problem on camera.", 60, 200);
+    text("Dr. Okafor, the researcher running the wildlife survey, has gone missing.\nA new fence and road are being built through the reserve.\nThe rangers think the animals are in trouble.\nYou have 3 nights to catch the problem on camera.\nCompare your photos with Dr. Okafor's old ones to spot what has changed.", 60, 180);
     button("Continue", 320, 450);
   } else if (screen == "map") {
     // Map: the player picks 2 places for the cameras
@@ -166,6 +180,11 @@ function draw() {
     if (!tonight[cameras[0]].clue && !tonight[cameras[1]].clue) {
       text("Tip: nothing looks wrong here tonight. Try other places next night.", 400, 490);
     }
+    // Button to switch between tonight's photos and Dr. Okafor's,
+    // only if one of the cameras is at a place with an old photo
+    if (old[cameras[0]] || old[cameras[1]]) {
+      button(showOld ? "Tonight's photos" : "Old photos", 20, 530);
+    }
     // After the last night the button goes to the end screen instead
     button(night < 3 ? "Next night" : "Finish", 620, 530);
   } else if (screen == "end") {
@@ -212,8 +231,10 @@ function loadPic(path, w, h) {
 
 // Draws the photo for one place on the current night, with its top-left corner at (x, y).
 // The photos are 800x500 and are shown here at 370x231.
+// While showOld is on, places that have one show Dr. Okafor's old photo instead.
 function drawPhoto(place, x, y) {
-  image(photos[night][place], x, y, 370, 231);
+  let showingOld = showOld && old[place];
+  image(showingOld ? old[place].pic : photos[night][place], x, y, 370, 231);
 
   // camera label in a dark strip along the bottom of the photo
   fill(0, 150);
@@ -221,7 +242,11 @@ function drawPhoto(place, x, y) {
   fill(255);
   textAlign(LEFT);
   textSize(12);
-  text("CAM - " + places[place] + " - NIGHT " + night + " - " + events[night - 1][place].time, x + 10, y + 226);
+  if (showingOld) {
+    text("DR. OKAFOR - " + places[place] + " - " + old[place].when, x + 10, y + 226);
+  } else {
+    text("CAM - " + places[place] + " - NIGHT " + night + " - " + events[night - 1][place].time, x + 10, y + 226);
+  }
 }
 
 // p5 calls this once per click. Each branch handles clicks for one screen.
@@ -256,7 +281,9 @@ function mousePressed() {
       if (mouseX > 410 && mouseX < 780) clicked = cameras[1];
     }
     // Tell the player what the photo shows, and add its clue the first time it is found
-    if (clicked != -1) {
+    if (clicked != -1 && showOld && old[clicked]) {
+      message = old[clicked].note;
+    } else if (clicked != -1) {
       let event = events[night - 1][clicked];
       if (event.clue) {
         message = "Good eye! " + event.note;
@@ -265,10 +292,14 @@ function mousePressed() {
         message = "Nothing wrong here. " + event.note;
       }
     }
+    if ((old[cameras[0]] || old[cameras[1]]) && onButton(20, 530)) {
+      showOld = !showOld;
+    }
     // Next night / Finish button. Cameras stay where they were,
     // so the player can move them on the map.
     if (onButton(620, 530)) {
       message = "";
+      showOld = false;
       if (night < 3) {
         night++;
         screen = "map";
