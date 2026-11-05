@@ -9,6 +9,9 @@ let screen = "title";
 let places = ["Forest", "Creek", "Corridor", "Farm", "Road"];
 let placeX = [150, 280, 500, 650, 450];
 let placeY = [180, 400, 260, 480, 100];
+// Names used in the photo files, e.g. assets/photos/N2-corridor-frame-1.jpg
+let ids = ["forest", "creek", "corridor", "farm", "ridge"];
+let photos = {}; // photos[night][place] is that place's photo on that night
 
 let cameras = []; // indexes of the places that have a camera (max 2)
 let timer = 0;    // counts frames on the night screen
@@ -21,6 +24,13 @@ function setup() {
   createCanvas(800, 600);
   // Draw at double resolution so the canvas stays sharp when scaled up
   pixelDensity(2);
+  // Load the photo of every place on every night (15 in total)
+  for (let n = 1; n <= 3; n++) {
+    photos[n] = [];
+    for (let i = 0; i < 5; i++) {
+      photos[n][i] = loadPic("assets/photos/N" + n + "-" + ids[i] + "-frame-1.jpg", 800, 500);
+    }
+  }
 }
 
 // p5 calls draw() about 60 times a second. Each branch draws one screen.
@@ -159,64 +169,29 @@ function onButton(x, y) {
   return mouseX > x && mouseX < x + 160 && mouseY > y && mouseY < y + 50;
 }
 
-// Draws the camera photo for one place, with its top-left corner at (x, y).
-// place is an index into the places list.
+// Loads a picture through an <img> tag rather than loadImage(),
+// so it also works when index.html is opened straight from disk.
+// The picture is blank until the file has loaded.
+function loadPic(path, w, h) {
+  let pic = createImage(w, h);
+  let img = new Image();
+  img.onload = () => pic.drawingContext.drawImage(img, 0, 0, w, h);
+  img.src = path;
+  return pic;
+}
+
+// Draws the photo for one place on the current night, with its top-left corner at (x, y).
+// The photos are 800x500 and are shown here at 370x231.
 function drawPhoto(place, x, y) {
-  // dark green photo background
-  fill(50, 70, 50);
-  rect(x, y, 370, 250);
+  image(photos[night][place], x, y, 370, 231);
 
-  if (place == 0) {
-    // forest
-    fill(30, 90, 40);
-    ellipse(x + 80, y + 80, 100, 100);
-    ellipse(x + 280, y + 70, 120, 120);
-    fill(150, 110, 70);
-    ellipse(x + 180, y + 180, 80, 40); // deer
-  } else if (place == 1) {
-    // creek
-    fill(60, 110, 180);
-    rect(x, y + 170, 370, 50);
-    fill(150, 110, 70);
-    ellipse(x + 180, y + 160, 80, 40); // deer
-  } else if (place == 2) {
-    // corridor, fenced from night 2
-    if (night > 1) {
-      stroke(200);
-      strokeWeight(3);
-      // 8 fence posts
-      for (let i = 0; i < 8; i++) {
-        line(x + 20 + i * 45, y + 100, x + 20 + i * 45, y + 200);
-      }
-      // 2 wires across the posts
-      line(x, y + 130, x + 370, y + 130);
-      line(x, y + 170, x + 370, y + 170);
-      stroke(0);
-      strokeWeight(1);
-    }
-    fill(90);
-    ellipse(x + 150, y + 210, 70, 30); // badger
-  } else if (place == 3) {
-    // farm
-    fill(160, 50, 40);
-    rect(x + 220, y + 60, 110, 90); // barn
-    fill(220, 120, 40);
-    ellipse(x + 120, y + 190, 60, 25); // fox
-  } else if (place == 4) {
-    // road
-    fill(110);
-    rect(x, y + 160, 370, 60);
-    fill(20);
-    rect(x + 120, y + 130, 130, 50); // truck
-    fill(255, 255, 150);
-    ellipse(x + 250, y + 150, 20, 15); // headlight
-  }
-
-  // camera label along the bottom of the photo
+  // camera label in a dark strip along the bottom of the photo
+  fill(0, 150);
+  rect(x, y + 211, 370, 20);
   fill(255);
   textAlign(LEFT);
   textSize(12);
-  text("CAM - " + places[place] + " - NIGHT " + night, x + 10, y + 242);
+  text("CAM - " + places[place] + " - NIGHT " + night, x + 10, y + 226);
 }
 
 // p5 calls this once per click. Each branch handles clicks for one screen.
@@ -246,7 +221,7 @@ function mousePressed() {
   } else if (screen == "photos") {
     // which photo did they click (-1 means neither)
     let clicked = -1;
-    if (mouseY > 100 && mouseY < 350) {
+    if (mouseY > 100 && mouseY < 331) {
       if (mouseX > 20 && mouseX < 390) clicked = cameras[0];
       if (mouseX > 410 && mouseX < 780) clicked = cameras[1];
     }
