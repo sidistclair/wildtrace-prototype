@@ -1,5 +1,4 @@
 // Wild Trace prototype
-// TODO: a real report
 
 // ---------- Fonts and colours ----------
 
@@ -17,13 +16,16 @@ const SCREEN = "#a6f5a0";  // green text on the camera screen
 
 // ---------- Game data ----------
 
-// Which screen is showing: "title", "briefing", "plan", "watch", "review" or "end"
+// Which screen is showing: "title", "briefing", "plan", "watch", "review", "gear",
+// "report", "results" or "end"
 let screen = "title";
 let help = false; // true while the How to play page is open
+let askRestart = false; // true while "start over?" is showing
 
 // The 5 camera spots. The same index is used in every list,
 // e.g. index 2 is the Wildlife Corridor.
 let places = ["Old Forest", "Creek Crossing", "Wildlife Corridor", "Farm Edge", "Ridge Road"];
+let short = ["Forest", "Creek", "Corridor", "Farm", "Ridge"]; // for small captions
 // Names used in the art files, e.g. assets/photos/N2-corridor-frame-1.jpg
 let ids = ["forest", "creek", "corridor", "farm", "ridge"];
 // Where each place is on the map, as a fraction of the map's width and height
@@ -31,12 +33,17 @@ let mapX = [0.24, 0.4, 0.69, 0.84, 0.6];
 let mapY = [0.34, 0.63, 0.42, 0.78, 0.16];
 // The paper map is pinned to the corkboard in this box
 const MAP = { x: 70, y: 95, w: 760, h: 530 };
+const RIDGE = 4;
 
 let night = 1;              // current night, 1 to 3
 let cameras = [null, null]; // the place each camera is at (null = not placed yet)
+let lost = -1;              // the camera smashed on the ridge on night 2 (-1 = none)
+let lostAt = -1;            // the place it was smashed at
+let upgrades = [];          // the ids of the gear the player has picked
 let timer = 0;              // frames since the night started
 let flash = 0;              // brightness of a camera flash on the watch screen, fades to 0
-let clues = [];             // the clues the player has found so far
+let clues = [];             // the clues the player has flagged so far
+let flags = [];             // the scenes the player has flagged, as "night-place"
 let seen = [];              // the photos the player has taken, as "night-place"
 let pins = [];              // pinned photos, each { key, pic }
 
@@ -48,50 +55,188 @@ let comparing = false;  // true while an earlier photo is shown next to the curr
 let earlier = 0;        // which earlier photo is being compared
 let inspecting = false; // true while the photos zoom in under the mouse
 
+// The case report
+const SLOTS = 6;        // how many photos the player can use as evidence
+const SW = 101;         // size of an evidence slot (6 fit across the report)
+const SH = 74;
+let tray = [];          // every photo the player can pick, pinned first: { id, pic, caption, tags, pinned }
+let slots = [];         // slots[i] is the photo id in evidence slot i, or null
+let links = [];         // links[i] lists the claims the photo in slot i supports
+let selected = -1;      // the slot whose claims are being ticked (-1 = none)
+let order = [];         // the claims in the order they are shown (shuffled for every report)
+let confirming = false; // true while the "ready to submit?" check is showing
+let notice = "";        // a short warning on the report, e.g. when all slots are full
+let results = [];       // results[claim] once submitted: { status, text, linked }
+let attempts = 0;       // how many times the report has been submitted
+let history = [];       // every submitted report, oldest first: { slots, links, results }
+let writeStart = 0;     // the frame the handwriting animation started on
+
 // Mouse
-let click = false;    // true for the one frame after a click
-let hovering = false; // true when the mouse is over something clickable
+let click = false;      // true for the one frame after a click (a press and release without dragging)
+let hovering = false;   // true when the mouse is over something clickable
+let pressSource = null; // what could be dragged from where the mouse was pressed
+let pressX = 0, pressY = 0;
+let dragging = null;    // the camera being dragged: { cam: k }
 
 // What each camera sees: events[night - 1][place].
 // note describes the photo. clue is filled in when the photo shows something wrong,
 // and tag is the short name written on its polaroid on the results board.
+// tags[frame] is a hidden list of what each frame shows. The player never sees these;
+// the case report checks them to decide what the linked photos prove.
 // The same animals keep coming back: the fox (F1) has a white-tipped tail,
 // and the doe (D2) has a pale mark on her shoulder and a spotted fawn.
 let events = [
   [ // night 1
-    { time: "22:14", note: "A doe with a pale shoulder mark grazes with her spotted fawn. A fox with a white-tipped tail trots past.", clue: "" },
-    { time: "05:40", note: "An otter by the water, then the doe and her fawn come down to drink.", clue: "" },
-    { time: "01:10", note: "The fox and a badger travel along the corridor. Later a buck walks through.", clue: "" },
-    { time: "23:55", note: "Just the farm dog sniffing around the bins.", clue: "" },
-    { time: "14:20", note: "Daytime. Workers from Ridgeline Developments mark out a road next to their yellow truck.", clue: "A construction crew is marking out a new road on the ridge.", tag: "road crew" },
+    { time: "22:14", note: "A doe with a pale shoulder mark grazes with her spotted fawn. A fox with a white-tipped tail trots past.", clue: "",
+      tags: [["doe", "reserve"], ["fox", "reserve"]] },
+    { time: "05:40", note: "An otter by the water, then the doe and her fawn come down to drink.", clue: "",
+      tags: [["reserve", "water"], ["doe", "reserve", "water"]] },
+    { time: "01:10", note: "The fox and a badger travel along the corridor. Later a buck walks through.", clue: "",
+      tags: [["fox", "reserve", "corridor-use"], ["reserve", "corridor-use"]] },
+    { time: "23:55", note: "Just the farm dog sniffing around the bins.", clue: "",
+      tags: [["farm-dog", "farm"]] },
+    { time: "14:20", note: "Daytime. Workers from Ridgeline Developments mark out a road next to their yellow truck.", clue: "A construction crew is marking out a new road on the ridge.", tag: "road crew",
+      tags: [["new-road", "crew", "daylight"]] },
   ],
   [ // night 2
-    { time: "21:48", note: "The doe and her fawn again.", clue: "" },
-    { time: "20:30", note: "No animals, but there is a wire snare set on the path to the water. Later the doe and her fawn walk right past it.", clue: "Someone has set a snare by the creek.", tag: "snare!" },
-    { time: "00:30", note: "A badger reaches the half-built fence and has to turn back.", clue: "The new fence is cutting off the wildlife corridor.", tag: "fence" },
-    { time: "02:31", note: "The fox from the forest, white-tipped tail and all, is raiding the farm's bins.", clue: "The forest fox has been pushed out to the farm.", tag: "fox at farm" },
-    { time: "23:50", note: "A dark pickup with a roof light bar and a dented tailgate drives the new road at night. Two hours later a gloved hand grabs the camera.", clue: "A mystery pickup is using the new road at night.", tag: "night pickup" },
+    { time: "21:48", note: "The doe and her fawn walk along a new fence at the forest edge, pacing back and forth for a way through.", clue: "The fence now runs along the forest edge too, and the doe and fawn can't get through.", tag: "forest fence",
+      tags: [["doe", "reserve", "fence"], ["doe", "reserve", "fence"]] },
+    { time: "20:30", note: "No animals, but there is a wire snare set on the path to the water. Later the doe and her fawn walk right past it.", clue: "Someone has set a snare by the creek.", tag: "snare!",
+      tags: [["snare", "water"], ["snare", "doe", "reserve", "water"]] },
+    { time: "00:30", note: "A badger reaches the half-built fence and has to turn back.", clue: "The new fence is cutting off the wildlife corridor.", tag: "fence",
+      tags: [["fence"], ["fence", "fence-blocking"]] },
+    { time: "02:31", note: "The fox from the forest, white-tipped tail and all, is raiding the farm's bins.", clue: "The forest fox has been pushed out to the farm.", tag: "fox at farm",
+      tags: [["fox", "farm"], ["fox", "farm"]] },
+    { time: "23:50", note: "A dark pickup with a roof light bar and a dented tailgate drives the new road at night. Two hours later a gloved hand with a bright stripe on its sleeve grabs the camera.", clue: "A mystery pickup is using the new road at night.", tag: "night pickup",
+      tags: [["new-road", "night-vehicle"], ["gloved-hand"]] },
   ],
   [ // night 3
-    { time: "03:00", note: "Nothing. The forest is empty tonight.", clue: "" },
-    { time: "04:05", note: "A person with a headlamp and a bright stripe on their sleeve kneels at the snare. Fifteen minutes later the snare is gone, leaving only holes.", clue: "A hunter with a headlamp is checking the snare.", tag: "hunter" },
-    { time: "23:10", note: "The doe and her fawn reach the finished fence and can't get through.", clue: "The finished fence stops the doe and fawn using the corridor.", tag: "fence closed" },
-    { time: "03:30", note: "The doe and her fawn from the reserve are eating the farm's crops.", clue: "The doe and fawn have been pushed out to the farm.", tag: "deer at farm" },
-    { time: "04:20", note: "The same dark pickup, seen from behind. The plate reads K7R-418.", clue: "The pickup is back, and its plate is K7R-418.", tag: "K7R-418" },
+    { time: "03:00", note: "Nothing. The forest is empty tonight.", clue: "",
+      tags: [[], []] },
+    { time: "04:05", note: "A person with a headlamp and a bright stripe on their sleeve kneels at the snare. Fifteen minutes later the snare is gone, leaving only holes.", clue: "A hunter with a headlamp is checking the snare.", tag: "hunter",
+      tags: [["snare", "hunter", "water"], ["water"]] },
+    { time: "23:10", note: "The doe and her fawn reach the finished fence and can't get through.", clue: "The finished fence stops the doe and fawn using the corridor.", tag: "fence closed",
+      tags: [["fence", "doe", "reserve"], ["fence", "fence-blocking", "doe", "reserve"]] },
+    { time: "03:30", note: "The doe and her fawn from the reserve are eating the farm's crops.", clue: "The doe and fawn have been pushed out to the farm.", tag: "deer at farm",
+      tags: [["doe", "farm"], ["doe", "farm"]] },
+    { time: "04:20", note: "The same dark pickup, seen from behind. The plate reads K7R-418.", clue: "The pickup is back, and its plate is K7R-418.", tag: "K7R-418",
+      tags: [["new-road", "night-vehicle"]] },
+  ],
+  [ // night 4
+    { time: "22:40", note: "The fox with the white-tipped tail squeezes under the forest fence, then trots off towards the farm.", clue: "The forest fox is heading out towards the farm.", tag: "fox leaving",
+      tags: [["fox", "reserve", "fence"], ["fox", "reserve"]] },
+    { time: "21:15", note: "A new snare on the path to the water. The doe and her fawn stop, then walk the long way round it.", clue: "Another snare has been set by the creek.", tag: "new snare",
+      tags: [["snare", "water"], ["snare", "doe", "reserve", "water"]] },
+    { time: "01:50", note: "The fox reaches the finished fence, sniffs along it, and has to turn back.", clue: "The fence turns the fox back too.", tag: "fox blocked",
+      tags: [["fence", "fox", "reserve"], ["fence", "fence-blocking", "fox", "reserve"]] },
+    { time: "03:05", note: "The farm dog barks at the fox, which is raiding the hen house.", clue: "The forest fox is raiding the farm's hen house.", tag: "hen house",
+      tags: [["fox", "farm", "farm-dog"], ["fox", "farm"]] },
+    { time: "23:30", note: "The dark pickup parks on the new road with its lights off. Someone with a headlamp walks from it into the trees.", clue: "The pickup's driver walks into the reserve at night.", tag: "driver",
+      tags: [["new-road", "night-vehicle"], ["new-road", "hunter"]] },
+  ],
+  [ // night 5
+    { time: "02:00", note: "Nothing. The forest is still empty.", clue: "",
+      tags: [[], []] },
+    { time: "05:10", note: "The hunter with the striped sleeve checks the new snare at dawn, then heads back up towards the ridge.", clue: "The hunter is back checking snares at the creek.", tag: "hunter again",
+      tags: [["snare", "hunter", "water"], ["hunter", "water"]] },
+    { time: "00:15", note: "No animals come through the corridor at all. Only the fence.", clue: "",
+      tags: [["fence"], ["fence"]] },
+    { time: "04:00", note: "The doe and her fawn are back in the farm's vegetable patch until the farmer chases them off.", clue: "The doe and fawn keep coming back to the farm.", tag: "farm again",
+      tags: [["doe", "farm"], ["doe", "farm"]] },
+    { time: "23:55", note: "Two dark pickups on the new road now. One of them is K7R-418.", clue: "More night traffic on the new road, including K7R-418.", tag: "two pickups",
+      tags: [["new-road", "night-vehicle"]] },
   ],
 ];
 // How many frames each camera took: frameCounts[night - 1][place]
-let frameCounts = [[2, 2, 2, 1, 1], [1, 2, 2, 2, 2], [2, 2, 2, 2, 1]];
+let frameCounts = [[2, 2, 2, 1, 1], [2, 2, 2, 2, 2], [2, 2, 2, 2, 1], [2, 2, 2, 2, 2], [2, 2, 2, 2, 1]];
+// How many nights the survey lasts (one for each list in events)
+const NIGHTS = events.length;
 
 // Dr. Okafor's old photos, shown in the journal and compared with yours
 let archive = [
-  { file: "ARC-1", place: 0, when: "6 weeks ago", note: "Dr. Okafor's photo: the same fox, back when it lived in the forest." },
-  { file: "ARC-2", place: 2, when: "6 weeks ago", note: "Dr. Okafor's photo: the doe and her fawn walking freely through the corridor, before the fence." },
-  { file: "ARC-3", place: 4, when: "4 weeks ago", note: "Dr. Okafor's photo: the ridge before any road was built." },
-  { file: "ARC-4", place: 4, when: "9 days ago", note: "Dr. Okafor's photo: headlights on the ridge at night, just before the camera stopped working." },
+  { file: "ARC-1", place: 0, when: "6 weeks ago", note: "Dr. Okafor's photo: the same fox, back when it lived in the forest.", tags: ["fox", "reserve"] },
+  { file: "ARC-2", place: 2, when: "6 weeks ago", note: "Dr. Okafor's photo: the doe and her fawn walking freely through the corridor, before the fence.", tags: ["doe", "reserve", "corridor-use"] },
+  { file: "ARC-3", place: 4, when: "4 weeks ago", note: "Dr. Okafor's photo: the ridge before any road was built.", tags: [] },
+  { file: "ARC-4", place: 4, when: "9 days ago", note: "Dr. Okafor's photo: headlights on the ridge at night, just before the camera stopped working.", tags: ["night-vehicle"] },
 ];
 // Dr. Okafor's last notes, written in the journal
 let notes = ["Corridor numbers dropping.", "Fox seen near the farm??", "Someone's been at my cameras."];
+
+// The gear the ranger station can send. The player picks one after night 1 and one after night 2.
+// The spare camera is only offered to a player whose camera was smashed on the ridge.
+let gear = [
+  { id: "lens", name: "Zoom lens", icon: "zoom", text: "Unlocks the ZOOM key, so you can look at small details in a photo up close." },
+  { id: "app", name: "Photo matcher", icon: "compare", text: "Unlocks the COMPARE key: your photo side by side with older photos of the same place." },
+  { id: "motion", name: "Motion sensor log", icon: "pin", text: "Each evening the map shows where something moved last night at spots you didn't watch." },
+];
+const SPARE = { id: "spare", name: "Spare camera", icon: "camera", text: "Replaces the camera that was smashed, so you have 2 cameras again tonight." };
+
+// The claims in the case report. Three are true and two are false, and they are shown in a
+// random order with nothing saying which is which. check() looks at the hidden tags of the
+// photos linked to a true claim and returns "proven", "partly" or "none" with an explanation.
+// A false claim is never supported, whatever is linked to it.
+let claims = [
+  {
+    text: "The new fence has cut off the wildlife corridor.", truth: true, check: checkFence,
+    concept: "Habitat fragmentation",
+    explain: "A corridor links two patches of habitat. Cut it, and animals get stuck away from food, water and mates.",
+  },
+  {
+    text: "Animals pushed out of the reserve are causing trouble at the farm.", truth: true, check: checkFarm,
+    concept: "Human-wildlife conflict",
+    explain: "Animals that lose their home or their path move, often towards people. Then they raid crops and bins, and both sides lose.",
+  },
+  {
+    text: "The new road is letting poachers into the reserve.", truth: true, check: checkRoad,
+    concept: "Access",
+    explain: "Roads let people reach wild places quickly, at night, with nobody watching. That makes poaching easier.",
+  },
+  {
+    text: "The construction crew is setting the snares.", truth: false,
+    why: "The crew's yellow truck only appears in daylight and never near a snare. The night pickup is a different truck.",
+  },
+  {
+    text: "The animals left because the creek is drying up.", truth: false,
+    why: "There is water in every Creek Crossing photo.",
+  },
+];
+
+// Each check gets the tag lists of the photos linked to the claim
+
+// Proven by an animal actually turned back by the fence
+function checkFence(photos) {
+  let any = (t) => photos.some((p) => p.includes(t));
+  if (any("fence-blocking")) return { status: "proven", text: "Proven. An animal was turned back by the fence, so the corridor is cut." };
+  if (any("fence")) return { status: "partly", text: "Partly supported. You showed the fence, but not an animal actually turned back by it." };
+  if (any("corridor-use")) return { status: "partly", text: "Partly supported. You showed animals using the corridor, but not the fence stopping them." };
+  return { status: "none", text: "Not supported. A photo of an animal turned back by the corridor fence would prove it." };
+}
+
+// Proven by the same animal at home in the reserve and later at the farm
+function checkFarm(photos) {
+  let animals = [["fox", "the fox with the white-tipped tail"], ["doe", "the doe and her fawn"]];
+  let home = [], away = [];
+  for (let [a, name] of animals) {
+    if (photos.some((p) => p.includes(a) && p.includes("reserve"))) home.push(name);
+    if (photos.some((p) => p.includes(a) && p.includes("farm"))) away.push(name);
+  }
+  let both = home.find((name) => away.includes(name));
+  if (both) return { status: "proven", text: "Proven. The same animal, " + both + ", lived in the reserve and now turns up at the farm." };
+  if (home.length && away.length) return { status: "partly", text: "Partly supported. Your reserve and farm photos show different animals. You need the same animal in both places." };
+  if (away.length) return { status: "partly", text: "Partly supported. You showed " + away[0] + " at the farm, but not the same animal at home in the reserve." };
+  if (home.length) return { status: "partly", text: "Partly supported. You showed " + home[0] + " in the reserve, but not at the farm." };
+  return { status: "none", text: "Not supported. You needed the same animal at home in the reserve, then at the farm." };
+}
+
+// Proven by the new road, a vehicle at night and a snare, all together
+function checkRoad(photos) {
+  let needs = [["new-road", "the new road"], ["night-vehicle", "a vehicle at night"], ["snare", "a snare"]];
+  let missing = needs.filter(([t]) => !photos.some((p) => p.includes(t))).map(([t, name]) => name);
+  if (missing.length == 0) return { status: "proven", text: "Proven. The new road, a vehicle driving it at night and snares in the reserve add up." };
+  let list = missing.length == 1 ? missing[0] : missing.slice(0, -1).join(", ") + " and " + missing[missing.length - 1];
+  if (missing.length < 3) return { status: "partly", text: "Partly supported. Still missing: " + list + "." };
+  return { status: "none", text: "Not supported. You needed " + list + "." };
+}
 
 // ---------- Artwork ----------
 
@@ -110,8 +255,9 @@ function setup() {
   // Ask the browser to download the fonts now, so they are ready when they are first drawn
   for (let f of [MARKER, HAND, TYPE, PIXEL]) document.fonts.load('20px "' + f + '"');
 
-  // Load every frame from every place on every night (15 scenes in total)
-  for (let n = 1; n <= 3; n++) {
+  // Load every frame from every place on every night (5 scenes a night).
+  // Photos that don't exist yet just stay blank.
+  for (let n = 1; n <= NIGHTS; n++) {
     photos[n] = [];
     for (let i = 0; i < 5; i++) {
       photos[n][i] = [];
@@ -121,12 +267,21 @@ function setup() {
     }
   }
   for (let a of archive) a.pic = loadPic("assets/photos/" + a.file + "-frame-1.jpg", 800, 500);
-  for (let n = 1; n <= 3; n++) maps[n] = loadPic("assets/map/night-" + n + ".jpg", 1720, 1200);
+  for (let n = 1; n <= NIGHTS; n++) maps[n] = loadPic("assets/map/night-" + n + ".jpg", 1720, 1200);
   titlePic = loadPic("assets/screens/title-background.jpg", 1920, 1080);
   for (let name of ["left", "right", "zoom", "pin", "compare", "warning", "camera"]) {
     icons[name] = loadPic("assets/ui/icons/" + name + "-light.png", 96, 96);
   }
   makeTextures();
+  saved = loadSave();
+  // save one last time when the tab is closed or hidden
+  window.addEventListener("pagehide", autosave);
+}
+
+// The map for a night. A night without its own map painting yet uses the latest one that exists.
+function mapFor(n) {
+  for (let m = n; m > 1; m--) if (maps[m].loaded) return maps[m];
+  return maps[1];
 }
 
 // Loads a picture through an <img> tag rather than loadImage(),
@@ -135,7 +290,10 @@ function setup() {
 function loadPic(path, w, h) {
   let pic = createImage(w, h);
   let img = new Image();
-  img.onload = () => pic.drawingContext.drawImage(img, 0, 0, w, h);
+  img.onload = () => {
+    pic.drawingContext.drawImage(img, 0, 0, w, h);
+    pic.loaded = true;
+  };
   img.src = path;
   return pic;
 }
@@ -199,50 +357,85 @@ function draw() {
   noStroke();
   // While the How to play page is open, clicks only reach the page
   let realClick = click;
-  if (help) click = false;
+  if (help || askRestart) click = false;
 
   if (screen == "title") drawTitle();
   else if (screen == "briefing") drawBriefing();
   else if (screen == "plan") drawPlan();
   else if (screen == "watch") drawWatch();
   else if (screen == "review") drawReview();
+  else if (screen == "gear") drawGear();
+  else if (screen == "report") drawReport();
+  else if (screen == "results") drawResults();
   else if (screen == "end") drawEnd();
 
   click = realClick;
   if (help) {
     hovering = false;
     drawHelp();
-  } else if (screen != "title" && helpButton(1236, 40)) {
-    help = true;
+  } else if (askRestart) {
+    hovering = false;
+    drawRestart();
+  } else if (screen != "title") {
+    if (helpButton(1236, 40)) help = true;
+    if (helpButton(1184, 40, "↺")) askRestart = true;
   }
-  // A hand cursor shows what can be clicked
-  cursor(hovering ? HAND : ARROW);
+  // save the game twice a second if anything changed
+  if (frameCount % 30 == 0) autosave();
+  // A hand cursor shows what can be clicked. ("pointer" is spelt out because
+  // our HAND font name hides p5's HAND cursor constant.)
+  cursor(dragging ? "grabbing" : hovering ? "pointer" : ARROW);
   click = false;
 }
 
-// p5 calls this once per click. The click is handled by the buttons in the next draw().
+// When the mouse goes down, remember what is under it in case the player drags it
 function mousePressed() {
-  click = true;
+  pressSource = help || askRestart ? null : dragSourceAt();
+  pressX = mouseX;
+  pressY = mouseY;
+  dragging = null;
+}
+
+// Moving more than a few pixels with the mouse down starts a drag
+function mouseDragged() {
+  if (pressSource && !dragging && dist(mouseX, mouseY, pressX, pressY) > 6) dragging = pressSource;
+}
+
+// Letting go either drops what is being dragged, or counts as a click.
+// The click is handled by the buttons in the next draw().
+function mouseReleased() {
+  if (dragging) drop();
+  else click = true;
+  dragging = null;
+  pressSource = null;
 }
 
 // Keyboard shortcuts (listed on the How to play page)
 function keyPressed() {
   if (keyCode == ESCAPE) {
     help = false;
+    askRestart = false;
     comparing = false;
+    dragging = null;
+    pressSource = null;
+    confirming = false;
+    selected = -1;
   }
-  if (help) return;
+  if (help || askRestart) return;
   if (screen == "plan" && key >= "1" && key <= "5") placeCamera(int(key) - 1);
   if (screen == "watch" && key == " ") startReview();
   if (screen == "review") {
     if (keyCode == LEFT_ARROW) stepFrame(-1);
     if (keyCode == RIGHT_ARROW) stepFrame(1);
-    if (keyCode == UP_ARROW || keyCode == DOWN_ARROW) chooseCamera(1 - current);
+    if (keyCode == UP_ARROW || keyCode == DOWN_ARROW) {
+      let a = active();
+      chooseCamera(a[(a.indexOf(current) + 1) % a.length]);
+    }
     let k = key.toLowerCase();
     if (k == "f") flagPhoto();
     if (k == "p") togglePin();
-    if (k == "c" && earlierPhotos().length > 0) toggleCompare();
-    if (k == "v") inspecting = !inspecting;
+    if (k == "c" && has("app") && earlierPhotos().length > 0) toggleCompare();
+    if (k == "v" && has("lens")) inspecting = !inspecting;
   }
 }
 
@@ -265,10 +458,18 @@ function drawTitle() {
   txt("WILD TRACE", 0, 0, 118, "#f4efe2", MARKER);
   pop();
   shadowOff();
-  txt("three nights. two cameras. one missing researcher.", 98, 392, 38, "#e9e2cf", HAND);
+  txt(["", "one", "two", "three", "four", "five", "six", "seven"][NIGHTS] + " nights. two cameras. one missing researcher.", 98, 392, 38, "#e9e2cf", HAND);
 
-  if (noteButton("Start", 96, 450, 200, 84)) screen = "briefing";
-  if (noteButton("How to play", 326, 456, 250, 84, PAPER, 0.03)) help = true;
+  if (saved) {
+    // a game in progress: carry on, or start again (which asks first)
+    let where = ["report", "results", "end"].includes(saved.screen) ? "the case" : "night " + saved.night;
+    if (noteButton("Continue: " + where, 96, 450, 320, 84)) resumeGame(saved);
+    if (noteButton("New game", 446, 456, 210, 84, PAPER, 0.03)) askRestart = true;
+    if (noteButton("How to play", 686, 462, 230, 84, PAPER, -0.02)) help = true;
+  } else {
+    if (noteButton("Start", 96, 450, 200, 84)) screen = "briefing";
+    if (noteButton("How to play", 326, 456, 250, 84, PAPER, 0.03)) help = true;
+  }
 }
 
 // Briefing: Dr. Okafor's journal lying open on the desk
@@ -308,7 +509,7 @@ function drawBriefing() {
   strokeWeight(1);
   noStroke();
   // a sticky note left for the player
-  stickyNote(160, 430, 280, 170, -0.04, "Okafor is missing.\nTake the 2 cameras.\n3 nights until the hearing.");
+  stickyNote(160, 430, 280, 170, -0.04, "Okafor is missing.\nTake the 2 cameras.\n" + NIGHTS + " nights until the hearing.");
 
   // Right page: Okafor's old photos taped in
   let spots = [[790, 205, -0.05], [1065, 215, 0.04], [795, 455, 0.03], [1070, 450, -0.04]];
@@ -336,11 +537,20 @@ function drawPlan() {
   fill(PAPER);
   rect(MAP.x - 8, MAP.y - 8, MAP.w + 16, MAP.h + 16);
   shadowOff();
-  image(maps[night], MAP.x, MAP.y, MAP.w, MAP.h);
+  image(mapFor(night), MAP.x, MAP.y, MAP.w, MAP.h);
   for (let [x, y] of [[MAP.x + 6, MAP.y + 4], [MAP.x + MAP.w - 6, MAP.y + 4], [MAP.x + 6, MAP.y + MAP.h - 4], [MAP.x + MAP.w - 6, MAP.y + MAP.h - 4]]) {
     pushpin(x, y, "#c0392b");
   }
-  paperLabel("Where should the cameras go?", 450, 64, -0.01);
+  paperLabel(active().length == 1 ? "Where should your last camera go?" : "Where should the cameras go?", 450, 64, -0.01);
+
+  // With the motion sensor log, show tracks at the spots nobody watched last night
+  // where something happened
+  if (has("motion") && night > 1) {
+    for (let p = 0; p < 5; p++) {
+      if (seen.includes(night - 1 + "-" + p) || !events[night - 2][p].clue) continue;
+      tracks(MAP.x + mapX[p] * MAP.w - 6, MAP.y + mapY[p] * MAP.h + 36);
+    }
+  }
 
   // the 5 places: a pin and a handwritten tag, or a camera if one is there
   let focus = -1; // the place whose old photo is shown on the desk
@@ -352,10 +562,12 @@ function drawPlan() {
   // Right side of the desk: the calendar, the cameras and Okafor's photo of a place
   calendar(925, 40, -0.03);
   for (let k = 0; k < 2; k++) deskCamera(k);
-  if (focus == -1) focus = cameras[1] != null ? cameras[1] : cameras[0] != null ? cameras[0] : -1;
+  if (focus == -1) {
+    for (let k of active()) if (cameras[k] != null) focus = cameras[k];
+  }
   let old = focus == -1 ? [] : archive.filter((a) => a.place == focus);
   if (focus == -1) {
-    stickyNote(930, 380, 300, 180, 0.03, "Point at a place on the map to see Okafor's old photo of it.", PAPER);
+    stickyNote(930, 380, 300, 180, 0.03, "Drag a camera onto the map, or click a place. Point at a place to see Okafor's old photo.", PAPER);
   } else if (old.length == 0) {
     stickyNote(930, 380, 300, 180, 0.03, places[focus] + ":\nno photos from here yet. Yours will be the first!", PAPER);
   } else {
@@ -364,11 +576,15 @@ function drawPlan() {
     tape(1080, 362, 0.08);
   }
 
-  let placed = cameras.filter((c) => c != null).length;
-  if (noteButton(placed < 2 ? "Place " + (2 - placed) + " more" : "Set the cameras →", 930, 628, 300, 72, STICKY, -0.02, placed < 2)) {
+  let need = active().length;
+  let placed = active().filter((k) => cameras[k] != null).length;
+  if (noteButton(placed < need ? "Place " + (need - placed) + " more" : need == 1 ? "Set the camera →" : "Set the cameras →", 930, 628, 300, 72, STICKY, -0.02, placed < need)) {
     timer = 0;
     screen = "watch";
   }
+
+  // the camera being dragged follows the mouse
+  if (dragging && dragging.cam != null) trailCamera(mouseX, mouseY, 0.8, dragging.cam + 1);
 }
 
 // Watch: the night passes on a glowing clock while the cameras record
@@ -399,9 +615,11 @@ function drawWatch() {
   txt("20:00", 400, 410, 26, "#8fa797", PIXEL, CENTER);
   txt("06:00", 880, 410, 26, "#8fa797", PIXEL, CENTER);
 
-  // A readout for each camera. It flashes when that camera takes its photo.
-  for (let k = 0; k < 2; k++) {
-    let x = 330 + k * 340;
+  // A readout for each working camera. It flashes when that camera takes its photo.
+  let list = active();
+  for (let j = 0; j < list.length; j++) {
+    let k = list[j];
+    let x = 640 - list.length * 170 + 20 + j * 340;
     let t = events[night - 1][cameras[k]].time.split(":");
     let since = (int(t[0]) * 60 + int(t[1]) - 20 * 60 + 1440) % 1440; // minutes after 20:00
     let snap = abs(minutes - 20 * 60 - since) < 25;
@@ -478,15 +696,18 @@ function drawReview() {
   screenText(places[place].toUpperCase(), 712, 128, 26, 0, RIGHT);
   screenText("NIGHT " + night + "  " + events[night - 1][place].time, 96, 488);
   screenText("FRAME " + (frame[current] + 1) + "/" + n + "   BAT ▮▮▮▯", 712, 488, 26, 0, RIGHT);
-  if (pinned) screenText("[ PINNED ]", 404, 128, 26, 0, CENTER, "#ffd866");
+  let marks = (pinned ? "[ PINNED ] " : "") + (isFlagged() ? "[ FLAGGED ]" : "");
+  if (marks) screenText(marks.trim(), 96, 160, 26, 0, LEFT, "#ffd866");
   if (inspecting) screenText("ZOOM 1.75x", 404, 488, 26, 0, CENTER, "#ffd866");
+  // the camera that is about to be smashed sent these photos just in time
+  if (current == doomed()) screenText("!! SIGNAL LOST AFTER THIS UPLOAD !!", 404, 196, 26, 0, CENTER, "#ff6b5e");
 
-  // the keys under the screen
+  // the keys under the screen. Zoom and compare need gear from the ranger station.
   if (deviceKey("left", "PREV", 84, 556, frame[current] == 0)) stepFrame(-1);
   if (deviceKey("right", "NEXT", 192, 556, frame[current] == n - 1)) stepFrame(1);
-  if (deviceKey("zoom", "ZOOM", 300, 556, false, inspecting)) inspecting = !inspecting;
+  if (deviceKey("zoom", has("lens") ? "ZOOM" : "NO LENS", 300, 556, !has("lens"), inspecting)) inspecting = !inspecting;
   if (deviceKey("pin", "PIN", 408, 556, false, pinned)) togglePin();
-  if (deviceKey("compare", "COMPARE", 516, 556, list.length == 0, comparing)) toggleCompare();
+  if (deviceKey("compare", has("app") ? "COMPARE" : "NO APP", 516, 556, !has("app") || list.length == 0, comparing)) toggleCompare();
   // a speaker grille
   fill(0, 90);
   for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) circle(670 + i * 14, 576 + j * 14, 6);
@@ -494,28 +715,283 @@ function drawReview() {
   // the camera switch and the big red flag button on the right
   txt("CAMERA", 822, 108, 14, "rgba(255,255,255,0.7)", TYPE, CENTER);
   for (let k = 0; k < 2; k++) {
-    if (deviceKey("camera", "CAM " + (k + 1), 776, 122 + k * 96, false, k == current)) chooseCamera(k);
+    if (deviceKey("camera", k == lost ? "LOST" : "CAM " + (k + 1), 776, 122 + k * 96, k == lost, k == current)) chooseCamera(k);
   }
-  if (flagButton(822, 410)) flagPhoto();
+  if (flagButton(822, 410, isFlagged())) flagPhoto();
 
   // Next to the camera: the calendar and a sticky note with what the player has learned
   calendar(940, 40, 0.03);
   let tonight = events[night - 1];
-  let hint = !tonight[cameras[0]].clue && !tonight[cameras[1]].clue
+  let hint = !active().some((k) => tonight[cameras[k]].clue)
     ? "Hmm... nothing looks wrong at these places tonight. Try other spots next night."
-    : "Look closely at both cameras. Hit the red FLAG button if something looks wrong.";
+    : "Look closely at each camera. Hit the red FLAG button if something looks wrong.";
   stickyNote(925, 220, 320, 330, -0.02, message || hint);
   if (message.startsWith("Good")) stamp("EVIDENCE", 1150, 520, -0.2, color(190, 40, 40, 220), 30);
 
-  let last = night == 3;
-  if (noteButton(last ? "Open the case →" : "Next night →", 940, 628, 290, 72)) {
+  let last = night == NIGHTS;
+  if (noteButton(last ? "Build the case →" : "Next night →", 940, 628, 290, 72)) {
     if (last) {
-      screen = "end";
+      startReport();
     } else {
+      // whoever drives the ridge road at night smashes a camera left there on night 2
+      if (night == 2) {
+        lost = doomed();
+        if (lost != -1) {
+          lostAt = cameras[lost];
+          cameras[lost] = null;
+        }
+      }
+      screen = "gear";
+    }
+  }
+}
+
+// Gear: a supply drop from the ranger station between nights. The player picks one item.
+function drawGear() {
+  desk();
+  paperLabel("Supply drop from the ranger station: pick one", 640, 70, -0.01);
+  let left = gear.filter((g) => !has(g.id));
+  if (lost != -1) left.push(SPARE); // offered at every drop until the camera is replaced
+  // nothing left to give: straight on to the next night
+  if (left.length == 0) {
+    night++;
+    screen = "plan";
+    return;
+  }
+  for (let i = 0; i < left.length; i++) {
+    let x = 640 + (i - (left.length - 1) / 2) * 380;
+    if (gearCard(left[i], x, 320, i % 2 ? 0.02 : -0.02)) {
+      if (left[i] == SPARE) lost = -1; // the camera is replaced
+      else upgrades.push(left[i].id);
       night++;
       screen = "plan";
     }
   }
+  // the bad news after night 2
+  if (lost != -1 && night == 2) {
+    stickyNote(380, 540, 520, 150, -0.02, "Bad news: CAM " + (lost + 1) + " was smashed on Ridge Road right after it caught that gloved hand. You have 1 camera left.");
+  }
+}
+
+// Case report: pick up to 5 photos as evidence, then tick the claims each one supports
+function drawReport() {
+  desk();
+  // While the confirmation is showing, clicks only reach it
+  let realClick = click;
+  if (confirming) click = false;
+
+  // Left: every photo the player has, pinned ones first
+  txt("Your photos", 50, 62, 36, "#f0e6cc", MARKER);
+  txt(pins.length ? "pinned photos first" : "click one to use it", 255, 60, 24, "#d8ccb0", HAND, LEFT, BOLD);
+  let hovered = null;
+  for (let i = 0; i < tray.length; i++) {
+    let [x, y] = gridPos(i);
+    let t = tray[i];
+    let used = slots.indexOf(t.id);
+    let g = gridLayout();
+    let hot = inside(x - g.w / 2 - 8, y - g.dy / 2 + 6, g.w + 16, g.dy - 12);
+    if (hot) {
+      hovering = true;
+      hovered = t;
+      if (click) pickPhoto(t.id);
+    }
+    if (used != -1 && used == selected) {
+      fill(STICKY);
+      rect(x - g.w / 2 - 10, y - g.dy / 2 + 4, g.w + 20, g.dy - 8, 6);
+    }
+    polaroid(t.pic, x, y, g.w, ((i * 5) % 3 - 1) * 0.03, t.caption, used != -1);
+    if (t.pinned) pushpin(x, y - g.dy / 2 + 10, "#c0392b");
+    if (used != -1) slotBadge(used, x, y - 6, g.w * 0.3);
+  }
+
+  // Right: the report form
+  shadowOn(20);
+  fill(PAPER);
+  rect(560, 20, 690, 680, 4);
+  shadowOff();
+  txt("CASE REPORT: WILLOWMERE RESERVE", 590, 60, 22, INK, TYPE);
+  txt("Evidence: your " + SLOTS + " strongest photos", 590, 96, 28, BLUE, HAND, LEFT, BOLD);
+
+  // the evidence slots
+  for (let i = 0; i < SLOTS; i++) {
+    let [sx, sy] = slotPos(i);
+    let id = slots[i];
+    let hot = inside(sx, sy, SW, SH);
+    let remove = id && dist(mouseX, mouseY, sx + SW - 14, sy + 14) < 12;
+    if (hot || remove) hovering = true;
+    if (id) {
+      shadowOn(6);
+      fill(250);
+      rect(sx - 4, sy - 4, SW + 8, SH + 8, 2);
+      shadowOff();
+      image(trayItem(id).pic, sx, sy, SW, SH);
+    } else {
+      fill(0, 12);
+      rect(sx, sy, SW, SH, 4);
+      noFill();
+      stroke(BLUE);
+      drawingContext.setLineDash([6, 5]);
+      rect(sx, sy, SW, SH, 4);
+      drawingContext.setLineDash([]);
+      noStroke();
+      txt("empty", sx + SW / 2, sy + SH / 2 + 8, 22, "rgba(38,64,107,0.5)", HAND, CENTER);
+    }
+    if (i == selected) {
+      noFill();
+      stroke(STICKY);
+      strokeWeight(5);
+      rect(sx - 6, sy - 6, SW + 12, SH + 12, 4);
+      strokeWeight(1);
+      noStroke();
+    }
+    slotBadge(i, sx + 4, sy + 4, 24);
+    if (id) {
+      // the remove button
+      fill(remove ? "#c0392b" : "rgba(0,0,0,0.55)");
+      circle(sx + SW - 14, sy + 14, 22);
+      txt("✕", sx + SW - 14, sy + 20, 15, "#fff", TYPE, CENTER);
+      // a warning dot when the photo isn't linked to any claim yet
+      if (links[i].length == 0) txt("not linked", sx + SW / 2, sy + SH + 22, 18, "#a3312b", HAND, CENTER, BOLD);
+    }
+    if (click) {
+      if (remove) removeSlot(i);
+      else if (hot) selected = selected == i ? -1 : i;
+    }
+  }
+
+  // the claims, with a box to tick for the selected photo
+  let ready = selected != -1 && slots[selected];
+  txt(ready ? "Tick every claim that photo " + (selected + 1) + " supports:"
+    : "Select a photo in a slot, then tick the claims it supports.", 590, 236, 26, ready ? "#a3312b" : BLUE, HAND, LEFT, BOLD);
+  let budget = (frameCount - writeStart) * 1.5; // how many letters have been written so far
+  for (let r = 0; r < order.length; r++) {
+    let c = order[r];
+    let y = 256 + r * 66;
+    let hot = ready && inside(580, y, 650, 60);
+    if (hot) {
+      hovering = true;
+      fill(246, 216, 96, 60);
+      rect(580, y, 650, 60, 4);
+      if (click) toggleLink(selected, c);
+    }
+    stroke(70, 110, 170, 60);
+    line(580, y + 62, 1230, y + 62);
+    noStroke();
+    // the tick box
+    let ticked = ready && links[selected].includes(c);
+    fill(ready ? 255 : "rgba(255,255,255,0.4)");
+    stroke(ready ? BLUE : "rgba(38,64,107,0.3)");
+    strokeWeight(2);
+    rect(592, y + 16, 28, 28, 4);
+    strokeWeight(1);
+    noStroke();
+    if (ticked) txt("✓", 606, y + 42, 32, "#a3312b", MARKER, CENTER);
+    writeText(claims[c].text, 638, y + 26, 440, 25, BLUE, HAND, 26, budget);
+    budget -= claims[c].text.length;
+    // which slots back this claim
+    let backing = [];
+    for (let i = 0; i < SLOTS; i++) if (slots[i] && links[i].includes(c)) backing.push(i);
+    for (let j = 0; j < backing.length; j++) slotBadge(backing[j], 1104 + (j % 4) * 30, y + 18 + floor(j / 4) * 26, 24);
+  }
+  if (click && budget < 0) writeStart = -100000;
+
+  if (notice) txtBox(notice, 590, 600, 340, 80, 24, "#a3312b", HAND, 26);
+  if (noteButton("Submit report →", 950, 620, 270, 66)) {
+    confirming = true;
+    selected = -1;
+  }
+
+  // a closer look at the photo under the mouse, over the report
+  if (hovered && !confirming) {
+    polaroid(hovered.pic, 905, 410, 460, 0.01, hovered.caption);
+    if (hovered.pinned) pushpin(905, 248, "#c0392b");
+  }
+
+  click = realClick;
+  if (confirming) drawConfirm();
+}
+
+// The "ready to submit?" check over the report
+function drawConfirm() {
+  fill(0, 150);
+  rect(0, 0, 1280, 720);
+  let used = slots.filter((id) => id).length;
+  let loose = [];
+  for (let i = 0; i < SLOTS; i++) if (slots[i] && links[i].length == 0) loose.push(i + 1);
+  push();
+  translate(640, 340);
+  rotate(-0.01);
+  shadowOn(30);
+  fill(PAPER);
+  rect(-330, -200, 660, 400, 4);
+  shadowOff();
+  txt("Ready to submit?", -290, -130, 46, INK, MARKER);
+  txt("You used " + used + " of " + SLOTS + " photos.", -290, -60, 34, BLUE, HAND, LEFT, BOLD);
+  let warn = used == 0 ? "You haven't picked any evidence yet."
+    : loose.length == 0 ? "Every photo is linked to at least one claim."
+      : loose.length == 1 ? "Photo " + loose[0] + " isn't linked to any claim, so it won't count."
+        : "Photos " + loose.join(", ") + " aren't linked to any claim, so they won't count.";
+  txtBox(warn, -290, -30, 580, 100, 30, used == 0 || loose.length ? "#a3312b" : BLUE, HAND, 32);
+  pop();
+  if (noteButton("Go back", 360, 430, 220, 70, PAPER, 0.02)) confirming = false;
+  if (noteButton("Submit →", 700, 430, 220, 70)) {
+    confirming = false;
+    submitReport();
+  }
+}
+
+// Results: how each claim held up, with the science behind the true ones
+function drawResults() {
+  desk();
+  shadowOn(20);
+  fill(PAPER);
+  rect(30, 20, 1220, 680, 4);
+  shadowOff();
+  let proven = claims.filter((cl, c) => cl.truth && results[c].status == "proven").length;
+  txt("The verdict", 60, 82, 54, INK, MARKER);
+  txt(proven + " of 3 true claims proven" + (attempts > 1 ? "  ·  attempt " + attempts : ""), 1190, 80, 22, INK, TYPE, RIGHT);
+
+  let looks = {
+    proven: ["PROVEN", color(40, 130, 60, 230)],
+    partly: ["PARTLY SUPPORTED", color(200, 120, 20, 230)],
+    none: ["NOT SUPPORTED", color(190, 40, 40, 220)],
+  };
+  let budget = (frameCount - writeStart) * 3;
+  for (let r = 0; r < order.length; r++) {
+    let c = order[r];
+    let cl = claims[c];
+    let res = results[c];
+    let y = 105 + r * 102;
+    stroke(70, 110, 170, 60);
+    line(60, y + 100, 1220, y + 100);
+    noStroke();
+    // shrink a long claim so it doesn't run into the right column
+    let title = r + 1 + ". " + cl.text;
+    textFont(HAND);
+    textStyle(BOLD);
+    textSize(26);
+    txt(title, 60, y + 30, min(26, (26 * 620) / textWidth(title)), INK, HAND, LEFT, BOLD);
+    writeText(res.text, 60, y + 54, 530, 21, BLUE, HAND, 21, budget);
+    budget -= res.text.length;
+    let heading = cl.truth ? cl.concept : "Why it's false";
+    let body = cl.truth ? cl.explain : cl.why;
+    txt(heading, 800, y + 30, 24, INK, HAND, LEFT, BOLD);
+    writeText(body, 800, y + 54, 420, 21, BLUE, HAND, 21, budget);
+    budget -= body.length;
+    // the stamp lands once the row has been written
+    if (budget > 0) {
+      if (cl.truth) stamp(looks[res.status][0], 705, y + 50, -0.12, looks[res.status][1], 18);
+      else stamp("FALSE CLAIM", 705, y + 50, -0.12, res.linked ? color(190, 40, 40, 220) : color(40, 130, 60, 230), 18);
+    }
+  }
+  let end = ending(proven);
+  writeText(end, 60, 642, proven < 3 ? 560 : 840, 25, "#a3312b", HAND, 26, budget, BOLD);
+  budget -= end.length;
+  if (click && budget < 0) writeStart = -100000;
+
+  // not a full case yet: the player can go back and improve the report
+  if (proven < 3 && noteButton("← Revise my report", 640, 628, 270, 64, PAPER, 0.02)) reviseReport();
+  if (noteButton("See the clue board →", 930, 628, 290, 64)) screen = "end";
 }
 
 // Results: every clue pinned to a corkboard, stamped FOUND or MISSED
@@ -536,10 +1012,21 @@ function drawEnd() {
 
   // one polaroid per clue, with a red string joining the ones the player found
   let all = [];
-  for (let n = 1; n <= 3; n++) {
+  for (let n = 1; n <= NIGHTS; n++) {
     for (let p = 0; p < 5; p++) if (events[n - 1][p].clue) all.push({ e: events[n - 1][p], pic: photos[n][p][0] });
   }
-  let spots = all.map((c, i) => [110 + (i < 5 ? i : i - 5 + 0.5) * 175, i < 5 ? 260 : 505, ((i * 7) % 5 - 2) * 0.02]);
+  // up to 10 clues in two rows of big polaroids, more in three rows of smaller ones
+  let rows = all.length <= 10 ? 2 : 3;
+  let cols = ceil(all.length / rows);
+  let pw = rows == 2 ? 136 : 100;   // polaroid width
+  let ph = (pw * 5) / 8 + 48;       // polaroid height
+  let dx = min(160, 780 / cols);
+  let spots = all.map((c, i) => {
+    let row = floor(i / cols);
+    let col = i % cols;
+    let y = rows == 2 ? [260, 505][row] : [225, 380, 535][row];
+    return [70 + pw / 2 + col * dx + (row % 2) * dx * 0.25, y, ((i * 7) % 5 - 2) * 0.02];
+  });
   stroke(190, 30, 30);
   strokeWeight(3);
   noFill();
@@ -547,7 +1034,7 @@ function drawEnd() {
   for (let i = 0; i < all.length; i++) {
     if (!clues.includes(all[i].e.clue)) continue;
     let [x, y] = spots[i];
-    if (prev) bezier(prev[0], prev[1] - 95, prev[0], prev[1] - 40, x, y - 40, x, y - 95);
+    if (prev) bezier(prev[0], prev[1] - ph / 2, prev[0], prev[1] - 40, x, y - 40, x, y - ph / 2);
     prev = [x, y];
   }
   noStroke();
@@ -556,10 +1043,10 @@ function drawEnd() {
   for (let i = 0; i < all.length; i++) {
     let [x, y, r] = spots[i];
     let got = clues.includes(all[i].e.clue);
-    polaroid(all[i].pic, x, y, 150, r, all[i].e.tag, !got);
-    pushpin(x, y - 95, got ? "#c0392b" : "#777");
-    stamp(got ? "FOUND" : "MISSED", x, y - 10, r - 0.25, got ? color(40, 130, 60, 230) : color(190, 40, 40, 220), 24);
-    if (inside(x - 85, y - 95, 170, 190)) hovered = all[i].e.clue;
+    polaroid(all[i].pic, x, y, pw, r, all[i].e.tag, !got);
+    pushpin(x, y - ph / 2, got ? "#c0392b" : "#777");
+    stamp(got ? "FOUND" : "MISSED", x, y - 10, r - 0.25, got ? color(40, 130, 60, 230) : color(190, 40, 40, 220), pw * 0.18);
+    if (inside(x - pw / 2 - 8, y - ph / 2, pw + 16, ph)) hovered = all[i].e.clue;
   }
   // the full clue for the polaroid under the mouse
   fill(250);
@@ -576,28 +1063,23 @@ function drawEnd() {
   rect(-150, -180, 300, 330);
   shadowOff();
   txt(n + "/" + all.length, 0, -70, 96, INK, MARKER, CENTER);
-  txt("clues found", 0, -28, 32, INK, HAND, CENTER, BOLD);
-  let outcome = n == all.length
-    ? "The hearing stops the building and orders a wildlife crossing. Rangers start night patrols."
-    : n >= 5 ? "The hearing hears about some of the damage, but part of the story stayed hidden."
-      : "With so few clues, construction carries on. Try watching different spots next time.";
-  txtBox(outcome, -130, -10, 260, 150, 26, BLUE, HAND);
+  txt("clues flagged", 0, -28, 32, INK, HAND, CENTER, BOLD);
+  let summary = n == all.length
+    ? "You caught every clue in the reserve. Nothing got past your cameras."
+    : "The dark photos are clues your cameras missed. Try watching different spots next time.";
+  txtBox(summary, -130, -10, 260, 150, 26, BLUE, HAND);
   pop();
   pushpin(1070, 54, "#e0a526");
 
   // the player's pinned photos
-  txt(pins.length ? "your pins:" : "you didn't pin any photos", 960, 400, 30, "#2b1a0e", HAND, LEFT, BOLD);
+  txt(pins.length ? "your pins:" : "no pinned photos", 960, 400, 30, "#2b1a0e", HAND, LEFT, BOLD);
   for (let i = 0; i < min(pins.length, 3); i++) {
     polaroid(pins[i].pic, 1000 + i * 95, 485, 96, (i - 1) * 0.06, "");
   }
 
   if (noteButton("Play again ↺", 950, 610, 280, 76)) {
-    night = 1;
-    cameras = [null, null];
-    clues = [];
-    seen = [];
-    pins = [];
-    screen = "title";
+    clearSave();
+    newGame();
   }
 }
 
@@ -617,29 +1099,103 @@ function drawHelp() {
   noStroke();
   txt("How to play", -320, -230, 54, INK, MARKER);
   let steps = [
-    "1. Each evening, pin your 2 cameras to places on the map.",
+    "1. Each evening, drag your cameras onto the map.",
     "2. Wait for morning, or skip ahead.",
-    "3. Check the photos on the trail camera: flip frames, zoom, and compare with older photos.",
-    "4. Hit the red FLAG button when something looks wrong. 9 clues to find in 3 nights!",
+    "3. Check the photos on the trail camera. New gear unlocks zoom and compare.",
+    "4. Hit the red FLAG button when something looks wrong. Hit it again to take the flag back.",
+    "5. After night " + NIGHTS + ", pick your " + SLOTS + " best photos and tick the claims each one proves.",
   ];
   let y = -168;
   for (let s of steps) {
     txtBox(s, -320, y, 640, 90, 30, BLUE, HAND, 40);
     y += s.length > 60 ? 80 : 40;
   }
-  txt("keys:  ← → frames   ↑ ↓ camera   F flag   P pin   C compare   V zoom   Esc close", -320, 200, 15, INK, TYPE);
+  txt("keys:  1-5 place   ← → frames   ↑ ↓ camera   F flag   P pin   C compare   V zoom", -320, 200, 15, INK, TYPE);
   pop();
   if (noteButton("Got it!", 790, 560, 180, 66)) help = false;
+}
+
+// ---------- Cameras ----------
+
+// The cameras that still work (one is smashed after night 2)
+function active() {
+  return [0, 1].filter((k) => k != lost);
+}
+
+// On night 2, the camera that will be smashed: the one on the ridge, or -1 if none is there
+function doomed() {
+  if (night != 2 || screen != "review") return -1;
+  return cameras.indexOf(RIDGE);
+}
+
+function has(id) {
+  return upgrades.includes(id);
+}
+
+// Puts the next free camera at a place, or takes it back if a camera is already there
+function placeCamera(i) {
+  let k = cameras.indexOf(i);
+  if (k != -1) {
+    cameras[k] = null;
+  } else {
+    let free = active().find((c) => cameras[c] == null);
+    if (free != undefined) cameras[free] = i;
+  }
+}
+
+// The place on the map under the mouse, or -1
+function spotAt() {
+  for (let i = 0; i < 5; i++) if (inside(...spotBox(i))) return i;
+  for (let i = 0; i < 5; i++) {
+    if (dist(mouseX, mouseY, MAP.x + mapX[i] * MAP.w, MAP.y + mapY[i] * MAP.h) < 50) return i;
+  }
+  return -1;
+}
+
+// What the player could start dragging from where the mouse is
+function dragSourceAt() {
+  if (screen == "plan") {
+    for (let k of active()) {
+      if (cameras[k] == null && inside(1110 + k * 90 - 36, 74, 72, 92)) return { cam: k };
+      if (cameras[k] != null) {
+        let [x, y] = spotBox(cameras[k]);
+        if (inside(...spotBox(cameras[k])) || dist(mouseX, mouseY, x + 18, y - 12) < 26) return { cam: k };
+      }
+    }
+  }
+  return null;
+}
+
+// Drops whatever is being dragged
+function drop() {
+  if (dragging.cam != null) {
+    // a camera: onto a place (swapping with a camera already there), or back to the desk
+    let k = dragging.cam;
+    let s = spotAt();
+    if (s == -1) {
+      cameras[k] = null;
+    } else {
+      let other = cameras.indexOf(s);
+      if (other != -1 && other != k) cameras[other] = cameras[k];
+      cameras[k] = s;
+    }
+  }
 }
 
 // ---------- Review actions (used by the keys and the keyboard) ----------
 
 // Moves to the end of the night: remembers which photos were taken and resets the review tools
 function startReview() {
-  for (let k = 0; k < 2; k++) seen.push(night + "-" + cameras[k]);
+  for (let k of active()) seen.push(night + "-" + cameras[k]);
+  openReview();
+}
+
+// Opens the review on the first working camera's first frame
+function openReview() {
   frame = [0, 0];
   flash = 0;
-  chooseCamera(0);
+  inspecting = false;
+  chooseCamera(active()[0]);
   screen = "review";
 }
 
@@ -655,8 +1211,17 @@ function stepFrame(d) {
 }
 
 // Tells the player what the photo shows, and adds its clue the first time it is found
+// Flagging a scene that is already flagged takes the flag (and its clue) back off.
 function flagPhoto() {
+  let scene = night + "-" + cameras[current];
   let event = events[night - 1][cameras[current]];
+  if (flags.includes(scene)) {
+    flags.splice(flags.indexOf(scene), 1);
+    if (event.clue) clues.splice(clues.indexOf(event.clue), 1);
+    message = "Flag removed.";
+    return;
+  }
+  flags.push(scene);
   if (event.clue) {
     message = "Good eye! " + event.note;
     if (!clues.includes(event.clue)) clues.push(event.clue);
@@ -670,6 +1235,10 @@ function togglePin() {
   let i = pins.findIndex((p) => p.key == key);
   if (i == -1) pins.push({ key: key, pic: currentPic() });
   else pins.splice(i, 1);
+}
+
+function isFlagged() {
+  return flags.includes(night + "-" + cameras[current]);
 }
 
 function isPinned() {
@@ -710,11 +1279,259 @@ function earlierPhotos() {
   return list;
 }
 
-// Puts the next free camera at a place, or takes it back if a camera is already there
-function placeCamera(i) {
-  let k = cameras.indexOf(i);
-  if (k != -1) cameras[k] = null;
-  else if (cameras.indexOf(null) != -1) cameras[cameras.indexOf(null)] = i;
+// ---------- Case report ----------
+
+// Opens a fresh report: a full photo grid, empty slots and the claims in a random order
+function startReport() {
+  buildTray();
+  slots = Array(SLOTS).fill(null);
+  links = slots.map(() => []);
+  selected = -1;
+  confirming = false;
+  notice = "";
+  order = shuffle(claims.map((cl, c) => c));
+  attempts = 0;
+  history = [];
+  writeStart = frameCount;
+  screen = "report";
+}
+
+// Fills the photo grid with every frame the player took plus Okafor's photos, pinned photos first
+function buildTray() {
+  let mine = [];
+  for (let s of seen) {
+    let [n, p] = s.split("-").map(Number);
+    let count = photos[n][p].length;
+    for (let f = 1; f <= count; f++) {
+      mine.push({
+        id: s + ":" + f,
+        pinKey: n + "-" + p + "-" + (f - 1),
+        pic: photos[n][p][f - 1],
+        caption: "N" + n + " " + short[p] + (count > 1 ? " " + f + "/" + count : ""),
+        tags: events[n - 1][p].tags[f - 1],
+      });
+    }
+  }
+  for (let a of archive) {
+    mine.push({ id: a.file, pinKey: null, pic: a.pic, caption: "Okafor · " + short[a.place], tags: a.tags });
+  }
+  // pinned photos first, in the order they were pinned
+  let pinned = [];
+  for (let pin of pins) {
+    let t = mine.find((m) => m.pinKey == pin.key);
+    if (t && !pinned.includes(t)) pinned.push(t);
+  }
+  for (let t of mine) t.pinned = pinned.includes(t);
+  tray = pinned.concat(mine.filter((t) => !t.pinned));
+}
+
+// Goes back to the report from the results, keeping every photo and tick
+function reviseReport() {
+  selected = -1;
+  confirming = false;
+  notice = "Your photos and ticks are still here. Change what you need, then submit again.";
+  writeStart = -100000; // the claims are already written out
+  screen = "report";
+}
+
+// The photo grid: 4 across, or 5 smaller ones across when there are more than 16 photos
+function gridLayout() {
+  return tray.length > 16 ? { cols: 5, w: 80, dx: 100, dy: 96, x: 82, y: 130 } : { cols: 4, w: 100, dx: 125, dy: 116, x: 100, y: 140 };
+}
+
+function gridPos(i) {
+  let g = gridLayout();
+  return [g.x + (i % g.cols) * g.dx, g.y + floor(i / g.cols) * g.dy];
+}
+
+function slotPos(i) {
+  return [590 + i * (SW + 10), 116];
+}
+
+function trayItem(id) {
+  return tray.find((t) => t.id == id);
+}
+
+// Clicking a photo: if it is already in a slot, select that slot. Otherwise put it in the
+// selected slot if that is empty, or the next free slot, and select it.
+function pickPhoto(id) {
+// The photo grid: 4 across, or 5 smaller ones across when there are more than 16 photos
+function gridLayout() {
+  return tray.length > 16 ? { cols: 5, w: 80, dx: 100, dy: 96, x: 82, y: 130 } : { cols: 4, w: 100, dx: 125, dy: 116, x: 100, y: 140 };
+}
+
+  notice = "";
+  let at = slots.indexOf(id);
+  if (at != -1) {
+    selected = at;
+    return;
+  }
+  let free = selected != -1 && !slots[selected] ? selected : slots.indexOf(null);
+  if (free == -1) {
+    notice = "All " + SLOTS + " slots are full. Remove a photo (✕) to make room.";
+    return;
+  }
+  slots[free] = id;
+  links[free] = [];
+  selected = free;
+}
+
+function removeSlot(i) {
+  slots[i] = null;
+  links[i] = [];
+  notice = "";
+}
+
+function toggleLink(i, c) {
+  let k = links[i].indexOf(c);
+  if (k == -1) links[i].push(c);
+  else links[i].splice(k, 1);
+}
+
+// A small numbered circle for an evidence slot
+function slotBadge(i, x, y, d) {
+  fill("#a3312b");
+  circle(x, y, d);
+  txt(i + 1, x, y + d * 0.28, d * 0.75, "#fff", MARKER, CENTER);
+}
+
+// Checks every claim against the hidden tags of the photos linked to it
+function submitReport() {
+  results = claims.map((cl, c) => {
+    let photosFor = [];
+    for (let i = 0; i < SLOTS; i++) if (slots[i] && links[i].includes(c)) photosFor.push(trayItem(slots[i]).tags);
+    let linked = photosFor.length;
+    if (cl.truth) return { ...cl.check(photosFor), linked };
+    let text = linked
+      ? "Not supported. You linked " + linked + (linked == 1 ? " photo" : " photos") + " to it, but it's false: that's jumping to a conclusion."
+      : "Not supported, and you rightly linked nothing to it.";
+    return { status: "none", text, linked };
+  });
+  attempts++;
+  history.push({ slots: slots.slice(), links: links.map((l) => l.slice()), results: results.map((r) => ({ ...r })) });
+  writeStart = frameCount;
+  screen = "results";
+}
+
+// The ending depends on how many of the 3 true claims were proven
+function ending(proven) {
+  let jumped = claims.some((cl, c) => !cl.truth && results[c].linked);
+  let s = proven == 3 ? "Full case! The hearing stops the building and orders a wildlife crossing. Rangers start night patrols."
+    : proven > 0 ? "Partial case. The hearing pauses the fence, but wants more proof before it acts on the rest."
+      : "Not enough evidence. The building carries on.";
+  if (jumped) s += " Linking photos to false claims made them doubt parts of your report.";
+  return s;
+}
+
+// ---------- Saving ----------
+// The game saves itself in the browser (localStorage) whenever something changes, so a player
+// can close the tab and carry on later. It only lasts on the same device and browser.
+
+const SAVE_KEY = "wildtrace-save-1";
+let saved = null;   // the saved game found when the page loaded, or null
+let lastSave = "";  // what was last written, so it is only written again when something changed
+
+// Everything needed to carry on later, or null before the game has really started
+function saveState() {
+  if (screen == "title" || screen == "briefing") return null;
+  let atReport = ["report", "results", "end"].includes(screen);
+  return {
+    version: 1,
+    screen: screen == "watch" ? "plan" : screen, // a night that was cut short starts again from the map
+    night, cameras, lost, lostAt, upgrades, clues, flags, seen,
+    pins: pins.map((p) => p.key),
+    report: atReport ? { slots, links, order, results, attempts, history } : null,
+  };
+}
+
+function autosave() {
+  let state = saveState();
+  if (!state) return;
+  let json = JSON.stringify(state);
+  if (json == lastSave) return;
+  lastSave = json;
+  try {
+    localStorage.setItem(SAVE_KEY, json);
+  } catch (e) {
+    // storage is blocked (e.g. a private window): the game still works, it just isn't saved
+  }
+}
+
+function loadSave() {
+  try {
+    let state = JSON.parse(localStorage.getItem(SAVE_KEY));
+    return state && state.version == 1 ? state : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearSave() {
+  saved = null;
+  lastSave = "";
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch (e) {}
+}
+
+// Puts a saved game back exactly where it was left
+function resumeGame(state) {
+  newGame();
+  ({ night, cameras, lost, lostAt, upgrades, clues, flags, seen } = state);
+  pins = state.pins.map((key) => {
+    let [n, p, f] = key.split("-").map(Number);
+    return { key, pic: photos[n][p][f] };
+  });
+  if (state.report) {
+    buildTray();
+    ({ slots, links, order, results, attempts, history } = state.report);
+    writeStart = -100000; // the claims are already written out
+  }
+  if (state.screen == "review") openReview();
+  screen = state.screen;
+}
+
+// Clears everything and goes back to the title screen
+function newGame() {
+  night = 1;
+  cameras = [null, null];
+  lost = -1;
+  lostAt = -1;
+  upgrades = [];
+  clues = [];
+  flags = [];
+  seen = [];
+  pins = [];
+  inspecting = false;
+  help = false;
+  askRestart = false;
+  selected = -1;
+  confirming = false;
+  notice = "";
+  screen = "title";
+}
+
+// "Start over?", over whatever screen is showing (also used by New game on the title screen)
+function drawRestart() {
+  fill(0, 150);
+  rect(0, 0, 1280, 720);
+  push();
+  translate(640, 340);
+  rotate(-0.01);
+  shadowOn(30);
+  fill(PAPER);
+  rect(-330, -170, 660, 340, 4);
+  shadowOff();
+  txt("Start over?", -290, -100, 46, INK, MARKER);
+  txtBox("Your cameras, photos, flags and case report will all be erased. This can't be undone.", -290, -60, 580, 120, 30, "#a3312b", HAND, 32);
+  pop();
+  if (noteButton("Keep playing", 360, 430, 240, 70, PAPER, 0.02)) askRestart = false;
+  if (noteButton("Start over", 700, 430, 220, 70)) {
+    let fromTitle = screen == "title";
+    clearSave();
+    newGame();
+    if (fromTitle) screen = "briefing"; // New game on the title screen goes straight in
+  }
 }
 
 // ---------- Drawing helpers ----------
@@ -739,6 +1556,69 @@ function txtBox(s, x, y, w, h, size, col, font, leading = size * 1.15) {
   textLeading(leading);
   text(s, x, y, w, h);
   textAlign(LEFT, BASELINE);
+}
+
+// Splits text into lines that fit in w pixels, using the current font and size
+function wrapLines(s, w) {
+  let lines = [];
+  for (let para of s.split("\n")) {
+    let line = "";
+    for (let word of para.split(" ")) {
+      let test = line ? line + " " + word : word;
+      if (line && textWidth(test) > w) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+// Handwriting that appears one letter at a time, with a pencil at the end while it is writing.
+// shown is how many letters to show; the first line's baseline is at y.
+function writeText(s, x, y, w, size, col, font, leading, shown, style = NORMAL) {
+  if (shown <= 0) return;
+  textFont(font);
+  textStyle(style);
+  textSize(size);
+  textAlign(LEFT, BASELINE);
+  fill(col);
+  let lines = wrapLines(s, w);
+  let left = floor(shown);
+  for (let i = 0; i < lines.length; i++) {
+    let part = lines[i].slice(0, left);
+    text(part, x, y + i * leading);
+    if (left < lines[i].length) {
+      pencil(x + textWidth(part), y + i * leading);
+      return;
+    }
+    left -= lines[i].length + 1; // +1 for the space between lines
+    if (left <= 0 && i < lines.length - 1) {
+      pencil(x, y + (i + 1) * leading);
+      return;
+    }
+  }
+}
+
+// A yellow pencil with its tip at (x, y)
+function pencil(x, y) {
+  push();
+  translate(x + 2, y - 4);
+  rotate(-0.8);
+  shadowOn(4);
+  fill("#f2b53a");
+  rect(12, -4, 40, 8);
+  shadowOff();
+  fill("#e8c9a0");
+  triangle(12, -4, 12, 4, 0, 0);
+  fill(INK);
+  triangle(4, -1.4, 4, 1.4, 0, 0);
+  fill("#e98b8b");
+  rect(52, -4, 8, 8, 0, 2, 2, 0);
+  pop();
 }
 
 // Soft drop shadows under paper, photos and the camera
@@ -774,7 +1654,7 @@ function desk() {
 // A sticky note used as a button. Returns true if it was clicked.
 // off makes it faded and unclickable.
 function noteButton(label, x, y, w, h, col = STICKY, rot = -0.02, off = false) {
-  let hot = !off && inside(x, y, w, h);
+  let hot = !off && !dragging && inside(x, y, w, h);
   if (hot) hovering = true;
   push();
   translate(x + w / 2, y + h / 2);
@@ -795,15 +1675,37 @@ function noteButton(label, x, y, w, h, col = STICKY, rot = -0.02, off = false) {
   return hot && click;
 }
 
-// A round paper tag with a question mark that opens How to play
-function helpButton(x, y) {
+// A gear card in the supply drop. Returns true if it was clicked.
+function gearCard(g, x, y, rot) {
+  let hot = inside(x - 160, y - 180, 320, 360);
+  if (hot) hovering = true;
+  push();
+  translate(x, y);
+  rotate(rot);
+  if (hot) scale(1.04);
+  shadowOn(hot ? 22 : 12);
+  fill(250);
+  rect(-160, -180, 320, 360, 4);
+  shadowOff();
+  fill("#1d2219");
+  circle(0, -95, 110);
+  image(icons[g.icon], -28, -123, 56, 56);
+  txt(g.name, 0, 4, 30, INK, MARKER, CENTER);
+  txtBox(g.text, -135, 24, 270, 150, 26, BLUE, HAND, 28);
+  pop();
+  tape(x, y - 182, rot + 0.05);
+  return hot && click;
+}
+
+// A round paper tag with a symbol on it: ? opens How to play, ↺ starts over
+function helpButton(x, y, symbol = "?") {
   let hot = dist(mouseX, mouseY, x, y) < 22;
   if (hot) hovering = true;
   shadowOn(8);
   fill(hot ? "#fff6dc" : PAPER);
   circle(x, y, 44);
   shadowOff();
-  txt("?", x, y + 11, 30, INK, MARKER, CENTER);
+  txt(symbol, x, y + 11, symbol == "?" ? 30 : 28, INK, symbol == "?" ? MARKER : TYPE, CENTER);
   return hot && click;
 }
 
@@ -898,6 +1800,20 @@ function stamp(words, x, y, rot, col, size) {
   pop();
 }
 
+// Animal tracks drawn on the map by the motion sensor log
+function tracks(x, y) {
+  fill(70, 45, 25, 210);
+  for (let i = 0; i < 3; i++) {
+    let px = x + i * 16;
+    let py = y + (i % 2) * 8;
+    ellipse(px, py, 8, 10);
+    circle(px - 4, py - 7, 3.5);
+    circle(px, py - 8.5, 3.5);
+    circle(px + 4, py - 7, 3.5);
+  }
+  txt("movement!", x + 48, y + 6, 24, "#a3312b", HAND, LEFT, BOLD);
+}
+
 // A tear-off calendar showing tonight's night
 function calendar(x, y, rot) {
   push();
@@ -911,7 +1827,7 @@ function calendar(x, y, rot) {
   rect(-70, -75, 140, 36, 4, 4, 0, 0);
   txt("NIGHT", 0, -49, 20, "#fff", TYPE, CENTER);
   txt(night, 0, 40, 74, INK, MARKER, CENTER);
-  txt("of 3", 0, 66, 22, "#666", HAND, CENTER, BOLD);
+  txt("of " + NIGHTS, 0, 66, 22, "#666", HAND, CENTER, BOLD);
   pop();
 }
 
@@ -929,9 +1845,11 @@ function spotBox(i) {
 // Returns true if it was clicked.
 function mapSpot(i) {
   let [x, y, w, h] = spotBox(i);
-  let hot = inside(x, y, w, h);
+  let draggingCam = dragging && dragging.cam != null;
+  let hot = draggingCam ? spotAt() == i : inside(x, y, w, h);
   if (hot) hovering = true;
   let k = cameras.indexOf(i);
+  if (draggingCam && dragging.cam == k) k = -1; // the camera is in the player's hand
   push();
   translate(x + 22, y + h / 2);
   rotate(((i % 3) - 1) * 0.03);
@@ -947,15 +1865,27 @@ function mapSpot(i) {
 }
 
 // The two cameras sitting on the desk. A placed camera leaves a dashed outline.
-// Clicking a placed camera's outline takes it back off the map.
+// Clicking a placed camera's outline takes it back off the map. A smashed camera is crossed out.
 function deskCamera(k) {
   let x = 1110 + k * 90;
   let y = 120;
-  if (cameras[k] == null) {
+  let hot = inside(x - 36, y - 46, 72, 92);
+  if (k == lost) {
     trailCamera(x, y, 1, k + 1);
-    txt("cam " + (k + 1), x, y + 76, 28, "#f0e6cc", HAND, CENTER, BOLD);
+    fill(0, 130);
+    rect(x - 32, y - 42, 64, 84, 10);
+    stroke("#c0392b");
+    strokeWeight(5);
+    line(x - 24, y - 34, x + 24, y + 34);
+    line(x + 24, y - 34, x - 24, y + 34);
+    noStroke();
+    strokeWeight(1);
+    txt("smashed", x, y + 76, 26, "#ff8a80", HAND, CENTER, BOLD);
+  } else if (cameras[k] == null && !(dragging && dragging.cam == k)) {
+    if (hot) hovering = true;
+    trailCamera(x, y, hot ? 1.06 : 1, k + 1);
+    txt(hot ? "drag me" : "cam " + (k + 1), x, y + 76, 28, "#f0e6cc", HAND, CENTER, BOLD);
   } else {
-    let hot = inside(x - 36, y - 46, 72, 92);
     if (hot) hovering = true;
     noFill();
     stroke(240, 230, 200, hot ? 230 : 120);
@@ -965,7 +1895,8 @@ function deskCamera(k) {
     drawingContext.setLineDash([]);
     noStroke();
     strokeWeight(1);
-    txt(hot ? "take back" : "on map", x, y + 76, 24, "#d8ccb0", HAND, CENTER, BOLD);
+    let label = dragging && dragging.cam == k ? "drop on map" : hot ? "take back" : "on map";
+    txt(label, x, y + 76, 24, "#d8ccb0", HAND, CENTER, BOLD);
     if (hot && click) cameras[k] = null;
   }
 }
@@ -1020,11 +1951,12 @@ function deviceKey(iconName, label, x, y, off = false, lit = false) {
   return hot && click;
 }
 
-// The big red FLAG button on the side of the camera. Returns true if it was clicked.
-function flagButton(x, y) {
+// The big red FLAG button on the side of the camera. on means the photo is already flagged:
+// the button glows amber and pressing it again takes the flag back. Returns true if it was clicked.
+function flagButton(x, y, on = false) {
   let hot = dist(mouseX, mouseY, x, y) < 58;
   if (hot) hovering = true;
-  fill(15);
+  fill(on ? "#ffb030" : 15); // an amber ring while flagged
   circle(x, y, 132);
   shadowOn(8);
   fill(hot ? "#e0483c" : "#b8322a");
@@ -1033,8 +1965,8 @@ function flagButton(x, y) {
   fill(255, 40);
   ellipse(x - 14, y - 22, 60, 30);
   image(icons.warning, x - 16, y - 34, 32, 32);
-  txt("FLAG", x, y + 26, 30, "#fff", MARKER, CENTER);
-  txt("SOMETHING'S\nWRONG", x, y + 88, 13, "rgba(255,255,255,0.8)", TYPE, CENTER);
+  txt(on ? "UNFLAG" : "FLAG", x, y + 26, on ? 22 : 30, "#fff", MARKER, CENTER);
+  txt(on ? "FLAGGED:\nPRESS TO UNDO" : "SOMETHING'S\nWRONG", x, y + 88, 13, "rgba(255,255,255,0.8)", TYPE, CENTER);
   return hot && click;
 }
 
