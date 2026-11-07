@@ -38,6 +38,7 @@ const RIDGE = 4;
 let night = 1;              // current night, 1 to 3
 let cameras = [null, null]; // the place each camera is at (null = not placed yet)
 let lost = -1;              // the camera smashed on the ridge on night 2 (-1 = none)
+let cleaned = [];           // the dirty-lens scenes the player has wiped clean, as "night-place"
 let lostAt = -1;            // the place it was smashed at
 let upgrades = [];          // the ids of the gear the player has picked
 let timer = 0;              // frames since the night started
@@ -149,6 +150,9 @@ let events = [
 ];
 // How many frames each camera took: frameCounts[night - 1][place]
 let frameCounts = [[2, 2, 2, 1, 1], [2, 2, 2, 2, 2], [2, 2, 2, 2, 1], [2, 2, 2, 2, 2], [2, 2, 2, 2, 1]];
+// Scenes where the camera comes back with a dirty lens, which the player has to wipe clean
+// before they can look properly ("night-place": what's on it)
+const DIRTY = { "1-3": "slobber", "2-1": "mud", "3-2": "droppings", "4-3": "slobber", "5-1": "mud" };
 // How many nights the survey lasts (one for each list in events)
 const NIGHTS = events.length;
 
@@ -169,7 +173,7 @@ let gear = [
   { id: "app", name: "Photo matcher", icon: "compare", text: "Unlocks the COMPARE key: your photo side by side with older photos of the same place." },
   { id: "motion", name: "Motion sensor log", icon: "pin", text: "Each evening the map shows where something moved last night at spots you didn't watch." },
 ];
-const SPARE = { id: "spare", name: "Spare camera", icon: "camera", text: "Replaces the camera that was smashed, so you have 2 cameras again tonight." };
+const REPAIR = { id: "repair", name: "Repair kit", icon: "camera", text: "Rewire the smashed camera so you have 2 cameras again tonight." };
 
 // The claims in the case report. Three are true and two are false, and they are shown in a
 // random order with nothing saying which is which. check() looks at the hidden tags of the
@@ -368,6 +372,7 @@ function draw() {
   else if (screen == "report") drawReport();
   else if (screen == "results") drawResults();
   else if (screen == "end") drawEnd();
+  else if (screen == "wires") drawWires();
 
   click = realClick;
   if (help) {
@@ -420,6 +425,7 @@ function keyPressed() {
     pressSource = null;
     confirming = false;
     selected = -1;
+    if (wires) wires.sel = -1;
   }
   if (help || askRestart) return;
   if (screen == "plan" && key >= "1" && key <= "5") placeCamera(int(key) - 1);
@@ -432,6 +438,8 @@ function keyPressed() {
       chooseCamera(a[(a.indexOf(current) + 1) % a.length]);
     }
     let k = key.toLowerCase();
+    // flag, pin, compare and zoom wait until a dirty lens has been wiped
+    if (isDirty()) return;
     if (k == "f") flagPhoto();
     if (k == "p") togglePin();
     if (k == "c" && has("app") && earlierPhotos().length > 0) toggleCompare();
@@ -566,7 +574,9 @@ function drawPlan() {
     for (let k of active()) if (cameras[k] != null) focus = cameras[k];
   }
   let old = focus == -1 ? [] : archive.filter((a) => a.place == focus);
-  if (focus == -1) {
+  if (loose != -1) {
+    stickyNote(930, 380, 300, 180, 0.03, "CAM " + (loose + 1) + " got knocked over and its wires came loose. Click it to fix it!");
+  } else if (focus == -1) {
     stickyNote(930, 380, 300, 180, 0.03, "Drag a camera onto the map, or click a place. Point at a place to see Okafor's old photo.", PAPER);
   } else if (old.length == 0) {
     stickyNote(930, 380, 300, 180, 0.03, places[focus] + ":\nno photos from here yet. Yours will be the first!", PAPER);
@@ -685,8 +695,10 @@ function drawReview() {
     screenText(e.note, 94, 440, 24, 620);
   } else {
     drawPhoto(currentPic(), 84, 100, 640, 400);
+    drawLens();
   }
   image(scanlines, 84, 100);
+  let dirty = isDirty();
   // the information along the top and bottom of the screen
   if (frameCount % 60 < 40) {
     fill("#ff4a3d");
@@ -705,9 +717,9 @@ function drawReview() {
   // the keys under the screen. Zoom and compare need gear from the ranger station.
   if (deviceKey("left", "PREV", 84, 556, frame[current] == 0)) stepFrame(-1);
   if (deviceKey("right", "NEXT", 192, 556, frame[current] == n - 1)) stepFrame(1);
-  if (deviceKey("zoom", has("lens") ? "ZOOM" : "NO LENS", 300, 556, !has("lens"), inspecting)) inspecting = !inspecting;
-  if (deviceKey("pin", "PIN", 408, 556, false, pinned)) togglePin();
-  if (deviceKey("compare", has("app") ? "COMPARE" : "NO APP", 516, 556, !has("app") || list.length == 0, comparing)) toggleCompare();
+  if (deviceKey("zoom", has("lens") ? "ZOOM" : "NO LENS", 300, 556, !has("lens") || dirty, inspecting)) inspecting = !inspecting;
+  if (deviceKey("pin", "PIN", 408, 556, dirty, pinned)) togglePin();
+  if (deviceKey("compare", has("app") ? "COMPARE" : "NO APP", 516, 556, !has("app") || list.length == 0 || dirty, comparing)) toggleCompare();
   // a speaker grille
   fill(0, 90);
   for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) circle(670 + i * 14, 576 + j * 14, 6);
@@ -717,7 +729,7 @@ function drawReview() {
   for (let k = 0; k < 2; k++) {
     if (deviceKey("camera", k == lost ? "LOST" : "CAM " + (k + 1), 776, 122 + k * 96, k == lost, k == current)) chooseCamera(k);
   }
-  if (flagButton(822, 410, isFlagged())) flagPhoto();
+  if (flagButton(822, 410, isFlagged(), dirty)) flagPhoto();
 
   // Next to the camera: the calendar and a sticky note with what the player has learned
   calendar(940, 40, 0.03);
@@ -725,7 +737,7 @@ function drawReview() {
   let hint = !active().some((k) => tonight[cameras[k]].clue)
     ? "Hmm... nothing looks wrong at these places tonight. Try other spots next night."
     : "Look closely at each camera. Hit the red FLAG button if something looks wrong.";
-  stickyNote(925, 220, 320, 330, -0.02, message || hint);
+  stickyNote(925, 220, 320, 330, -0.02, dirty ? dirtNote() : message || hint);
   if (message.startsWith("Good")) stamp("EVIDENCE", 1150, 520, -0.2, color(190, 40, 40, 220), 30);
 
   let last = night == NIGHTS;
@@ -751,20 +763,21 @@ function drawGear() {
   desk();
   paperLabel("Supply drop from the ranger station: pick one", 640, 70, -0.01);
   let left = gear.filter((g) => !has(g.id));
-  if (lost != -1) left.push(SPARE); // offered at every drop until the camera is replaced
+  if (lost != -1) left.push(REPAIR); // offered at every drop until the camera is fixed
   // nothing left to give: straight on to the next night
   if (left.length == 0) {
-    night++;
-    screen = "plan";
+    nextNight();
     return;
   }
   for (let i = 0; i < left.length; i++) {
     let x = 640 + (i - (left.length - 1) / 2) * 380;
     if (gearCard(left[i], x, 320, i % 2 ? 0.02 : -0.02)) {
-      if (left[i] == SPARE) lost = -1; // the camera is replaced
-      else upgrades.push(left[i].id);
-      night++;
-      screen = "plan";
+      if (left[i] == REPAIR) {
+        startWires(lost, "gear"); // fix it first; the puzzle goes on to the next night
+      } else {
+        upgrades.push(left[i].id);
+        nextNight();
+      }
     }
   }
   // the bad news after night 2
@@ -1138,7 +1151,7 @@ function placeCamera(i) {
   if (k != -1) {
     cameras[k] = null;
   } else {
-    let free = active().find((c) => cameras[c] == null);
+    let free = active().find((c) => cameras[c] == null && c != loose);
     if (free != undefined) cameras[free] = i;
   }
 }
@@ -1154,9 +1167,13 @@ function spotAt() {
 
 // What the player could start dragging from where the mouse is
 function dragSourceAt() {
+  if (screen == "wires" && !wires.done.every((d) => d)) {
+    let i = wireAt();
+    if (i != -1) return { wire: i };
+  }
   if (screen == "plan") {
     for (let k of active()) {
-      if (cameras[k] == null && inside(1110 + k * 90 - 36, 74, 72, 92)) return { cam: k };
+      if (cameras[k] == null && k != loose && inside(1110 + k * 90 - 36, 74, 72, 92)) return { cam: k };
       if (cameras[k] != null) {
         let [x, y] = spotBox(cameras[k]);
         if (inside(...spotBox(cameras[k])) || dist(mouseX, mouseY, x + 18, y - 12) < 26) return { cam: k };
@@ -1168,6 +1185,7 @@ function dragSourceAt() {
 
 // Drops whatever is being dragged
 function drop() {
+  if (dragging.wire != null) connect(dragging.wire, plugAt());
   if (dragging.cam != null) {
     // a camera: onto a place (swapping with a camera already there), or back to the desk
     let k = dragging.cam;
@@ -1423,6 +1441,381 @@ function ending(proven) {
   return s;
 }
 
+// ---------- Mini game: clean the lens ----------
+// Some scenes come back with a dirty lens (see DIRTY). The photo is smeared until the player
+// rubs it clean by holding the mouse down and dragging across the camera screen.
+
+let lens = null; // the dirt on the photo being shown: { scene, g, cells, wiped, fade }
+const LENS_X = 84;  // where the photo sits on the camera screen
+const LENS_Y = 100;
+const CELL = 32;    // the dirt is tracked on a grid of 32-pixel squares
+
+// The scene on the camera screen, as "night-place"
+function sceneKey() {
+  return night + "-" + cameras[current];
+}
+
+// True while the photo on screen still has a dirty lens
+function isDirty() {
+  return !!DIRTY[sceneKey()] && !cleaned.includes(sceneKey());
+}
+
+// A small random number generator that always gives the same numbers for the same seed,
+// so a scene's dirt looks the same every time it is shown
+function seededRandom(seed) {
+  let h = 2166136261;
+  for (let ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return (lo, hi) => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    let r = ((h ^= h >>> 16) >>> 0) / 4294967296;
+    return lo + r * (hi - lo);
+  };
+}
+
+// Draws the dirt for a scene into its own picture, and works out which grid squares it covers
+function makeLens(scene) {
+  let type = DIRTY[scene];
+  let rnd = seededRandom(scene);
+  let g = createGraphics(640, 400);
+  g.pixelDensity(1);
+  g.noStroke();
+  let blobs = []; // [x, y, radius] of every big splat, used to find the dirty squares
+  // a murky film over the whole photo, so nothing is clear until it is wiped
+  g.background(type == "mud" ? color(80, 55, 30, 120) : type == "slobber" ? color(200, 220, 185, 130) : color(225, 222, 210, 110));
+  if (type == "mud") {
+    for (let i = 0; i < 13; i++) {
+      let x = rnd(40, 600), y = rnd(30, 370), r = rnd(55, 105);
+      blobs.push([x, y, r]);
+      g.fill(92 + rnd(-15, 15), 62, 32, 235);
+      g.ellipse(x, y, r * 2, r * rnd(1.5, 2));
+      for (let j = 0; j < 8; j++) g.circle(x + rnd(-1.4, 1.4) * r, y + rnd(-1.4, 1.4) * r, rnd(8, 26)); // splashes
+      g.rect(x + rnd(-r / 2, r / 2), y, rnd(6, 12), rnd(30, 80), 6); // a drip
+      g.fill(130, 95, 55, 160);
+      g.ellipse(x - r * 0.3, y - r * 0.3, r * 0.6, r * 0.4); // a wet shine
+    }
+  } else if (type == "slobber") {
+    for (let i = 0; i < 17; i++) {
+      let x = rnd(30, 610), y = rnd(30, 370), r = rnd(50, 95);
+      blobs.push([x, y, r]);
+      g.fill(205, 222, 185, 205);
+      g.ellipse(x, y, r * 2.2, r * 1.6);
+      g.fill(235, 245, 225, 150);
+      g.ellipse(x + rnd(-20, 20), y + rnd(-20, 20), r * 1.2, r * 0.7);
+      g.stroke(255, 200);
+      g.strokeWeight(2);
+      g.noFill();
+      for (let j = 0; j < 5; j++) g.circle(x + rnd(-r, r), y + rnd(-r / 2, r / 2), rnd(6, 16)); // bubbles
+      g.noStroke();
+    }
+  } else {
+    // bird droppings: white splats with grey middles and a streak running down
+    for (let i = 0; i < 12; i++) {
+      let x = rnd(50, 590), y = rnd(30, 330), r = rnd(55, 100);
+      blobs.push([x, y, r], [x, y + r, r * 0.6]);
+      g.fill(238, 236, 225, 245);
+      g.ellipse(x, y, r * 2, r * 1.8);
+      g.rect(x - r * 0.35, y, r * 0.7, r * 1.4, r * 0.35);
+      for (let j = 0; j < 7; j++) g.circle(x + rnd(-1.5, 1.5) * r, y + rnd(-1.3, 1.3) * r, rnd(8, 22));
+      g.fill(150, 145, 130, 220);
+      g.ellipse(x + rnd(-10, 10), y + rnd(-10, 10), r * 0.7, r * 0.6);
+    }
+  }
+  // the grid squares whose middle is under a splat
+  let cells = [];
+  for (let cy = 0; cy < 400 / CELL; cy++) {
+    for (let cx = 0; cx < 640 / CELL; cx++) {
+      let mx = cx * CELL + CELL / 2, my = cy * CELL + CELL / 2;
+      if (blobs.some(([x, y, r]) => dist(mx, my, x, y) < r)) cells.push(cy * 100 + cx);
+    }
+  }
+  return { scene, type, g, cells, wiped: new Set(), fade: 255 };
+}
+
+// Rubs the lens along the line from the last mouse position to this one
+function wipe(x1, y1, x2, y2) {
+  let g = lens.g;
+  g.erase();
+  g.stroke(0);
+  g.strokeWeight(76);
+  g.line(x1, y1, x2, y2);
+  g.noErase();
+  g.noStroke();
+  // mark every grid square the cloth went over
+  let steps = max(1, ceil(dist(x1, y1, x2, y2) / 10));
+  for (let s = 0; s <= steps; s++) {
+    let x = lerp(x1, x2, s / steps), y = lerp(y1, y2, s / steps);
+    for (let c of lens.cells) {
+      let mx = (c % 100) * CELL + CELL / 2, my = floor(c / 100) * CELL + CELL / 2;
+      if (dist(x, y, mx, my) < 44) lens.wiped.add(c);
+    }
+  }
+}
+
+// How clean the lens is, from 0 to 1
+function lensClean() {
+  return lens.cells.length ? lens.wiped.size / lens.cells.length : 1;
+}
+
+// Draws the dirt over the photo and lets the player rub it off.
+// Once it is 85% clean the rest fades away by itself.
+function drawLens() {
+  let scene = sceneKey();
+  if (isDirty()) {
+    if (!lens || lens.scene != scene) {
+      if (lens) lens.g.remove();
+      lens = makeLens(scene);
+    }
+    let over = inside(LENS_X, LENS_Y, 640, 400);
+    if (over && mouseIsPressed && !help && !askRestart) {
+      wipe(constrain(pmouseX, LENS_X, LENS_X + 640) - LENS_X, constrain(pmouseY, LENS_Y, LENS_Y + 400) - LENS_Y, mouseX - LENS_X, mouseY - LENS_Y);
+      if (lensClean() >= 0.85) {
+        cleaned.push(scene);
+        message = "Lens clean! Now take a good look at the photo.";
+      }
+    }
+    image(lens.g, LENS_X, LENS_Y);
+    // how to clean it, blinking, with how clean it is so far
+    if (frameCount % 70 < 50) screenText("DIRTY LENS: HOLD AND RUB TO WIPE", 404, 300, 30, 0, CENTER, "#ffd866");
+    screenText("CLEAN " + floor(lensClean() * 100) + "%", 404, 336, 26, 0, CENTER, "#ffd866");
+    // a cloth under the mouse
+    if (over) {
+      hovering = true;
+      push();
+      translate(mouseX + 6, mouseY + 6);
+      rotate(-0.3 + (mouseIsPressed ? sin(frameCount * 0.6) * 0.15 : 0));
+      shadowOn(6);
+      fill("#8ec5e8");
+      rect(-26, -20, 52, 40, 6);
+      shadowOff();
+      stroke(255, 160);
+      strokeWeight(2);
+      for (let i = -12; i <= 12; i += 8) line(-22, i, 22, i);
+      noStroke();
+      strokeWeight(1);
+      pop();
+    }
+  } else if (lens && lens.scene == scene) {
+    // just cleaned: the last bits of dirt fade out
+    tint(255, lens.fade);
+    image(lens.g, LENS_X, LENS_Y);
+    noTint();
+    lens.fade -= 15;
+    if (lens.fade <= 0) {
+      lens.g.remove();
+      lens = null;
+    }
+  }
+}
+
+// Why the lens is dirty, for the sticky note next to the camera
+function dirtNote() {
+  let type = DIRTY[sceneKey()];
+  let why = type == "mud" ? "Splat! Mud got on the lens." : type == "slobber" ? "Ew! The farm dog licked the lens." : "A bird pooped on the lens!";
+  return why + " Hold the mouse down and rub across the screen to wipe it clean.";
+}
+
+// ---------- Mini game: reconnect the wires ----------
+// Used to fix the camera smashed on the ridge (with the repair kit) and the camera
+// whose wires come loose before night 4. Drag each loose wire to the plug of the same
+// colour, or click a wire and then its plug.
+
+const WIRE_COLOURS = [
+  { name: "red", col: "#d64541", mark: "●" },
+  { name: "blue", col: "#3a7bd5", mark: "▲" },
+  { name: "yellow", col: "#f2c94c", mark: "■" },
+  { name: "green", col: "#4caf50", mark: "★" },
+];
+const LOOSE_NIGHT = 4; // the night a camera's wires come loose
+
+let wires = null; // the puzzle being played: { cam, back, left, right, done, sel, wrongAt, wrongPlug }
+let loose = -1;   // the camera whose wires came loose (-1 = none)
+
+// Opens the wires puzzle for camera k. back is where to go afterwards: "plan" or "gear".
+function startWires(k, back) {
+  let left = shuffle([0, 1, 2, 3]);
+  let right = shuffle([0, 1, 2, 3]);
+  while (right.every((c, i) => c == left[i])) right = shuffle([0, 1, 2, 3]); // never already matched
+  wires = { cam: k, back, left, right, done: [false, false, false, false], sel: -1, wrongAt: -100, wrongPlug: -1 };
+  screen = "wires";
+}
+
+function wireEnd(i) {
+  return [400, 210 + i * 92];
+}
+
+function plugPos(j) {
+  return [880, 210 + j * 92];
+}
+
+// The plug under the mouse, or -1
+function plugAt() {
+  for (let j = 0; j < 4; j++) if (dist(mouseX, mouseY, ...plugPos(j)) < 42) return j;
+  return -1;
+}
+
+// The loose wire end under the mouse that isn't plugged in yet, or -1
+function wireAt() {
+  for (let i = 0; i < 4; i++) if (!wires.done[i] && dist(mouseX, mouseY, ...wireEnd(i)) < 36) return i;
+  return -1;
+}
+
+// Tries to plug wire i into plug j
+function connect(i, j) {
+  wires.sel = -1;
+  if (j == -1) return;
+  if (wires.right[j] == wires.left[i]) {
+    wires.done[i] = true;
+  } else {
+    wires.wrongAt = frameCount;
+    wires.wrongPlug = j;
+  }
+}
+
+// A thick wire with a little sag, from (x1, y1) to (x2, y2)
+function wireLine(x1, y1, x2, y2, col) {
+  noFill();
+  stroke(0, 90);
+  strokeWeight(20);
+  bezier(x1, y1, x1 + 120, y1 + 40, x2 - 120, y2 + 40, x2, y2);
+  stroke(col);
+  strokeWeight(14);
+  bezier(x1, y1, x1 + 120, y1 + 40, x2 - 120, y2 + 40, x2, y2);
+  stroke(255, 70);
+  strokeWeight(4);
+  bezier(x1, y1 - 3, x1 + 120, y1 + 37, x2 - 120, y2 + 37, x2, y2 - 3);
+  noStroke();
+  strokeWeight(1);
+}
+
+function drawWires() {
+  desk();
+  let all = wires.done.every((d) => d);
+  paperLabel(all ? "CAM " + (wires.cam + 1) + " is working again!" : "Fix CAM " + (wires.cam + 1) + ": plug each wire into the same colour", 640, 52, -0.01);
+
+  // the camera with its back panel open
+  shadowOn(26);
+  fill("#46503a");
+  rect(220, 92, 840, 560, 40);
+  shadowOff();
+  drawingContext.save();
+  drawingContext.beginPath();
+  drawingContext.roundRect(220, 92, 840, 560, 40);
+  drawingContext.clip();
+  image(camo, 220, 92);
+  drawingContext.restore();
+  fill("#15181a");
+  rect(270, 140, 740, 470, 14);
+  // the circuit board behind the plugs
+  fill("#1f5130");
+  rect(820, 160, 170, 430, 8);
+  stroke(200, 170, 80, 120);
+  for (let y = 175; y < 580; y += 22) line(830, y, 980, y + 8);
+  noStroke();
+  // the status light
+  fill(all ? "#55ff77" : frameCount % 40 < 20 ? "#ff4a3d" : "#5a1a16");
+  circle(300, 172, 18);
+  txt(all ? "POWER OK" : "NO POWER", 318, 179, 22, all ? "#9dffa9" : "#ff8a80", PIXEL);
+
+  // the plugs, with their colour and a symbol (for colour-blind players)
+  for (let j = 0; j < 4; j++) {
+    let [x, y] = plugPos(j);
+    let c = WIRE_COLOURS[wires.right[j]];
+    let wrong = j == wires.wrongPlug && frameCount - wires.wrongAt < 25;
+    shadowOn(6);
+    fill(wrong ? "#ff4a3d" : "#2a2f33");
+    rect(x - 34, y - 26, 68, 52, 8);
+    shadowOff();
+    fill(c.col);
+    rect(x - 26, y - 18, 52, 36, 6);
+    fill(0, 140);
+    circle(x - 10, y, 10);
+    circle(x + 10, y, 10);
+    txt(c.mark, x + 52, y + 9, 26, c.col, "sans-serif", CENTER);
+    if (wrong) txt("zzt!", x, y - 34, 24, "#ff8a80", MARKER, CENTER);
+  }
+
+  // the wires: plugged in, being dragged, or hanging loose
+  let held = dragging && dragging.wire != null ? dragging.wire : -1;
+  for (let i = 0; i < 4; i++) {
+    let [x, y] = wireEnd(i);
+    let c = WIRE_COLOURS[wires.left[i]];
+    // the wire comes out of the camera's broken connector on the left
+    fill("#2a2f33");
+    rect(280, y - 20, 50, 40, 6);
+    stroke(c.col);
+    strokeWeight(14);
+    line(330, y, x - 10, y);
+    noStroke();
+    strokeWeight(1);
+    txt(c.mark, 300, y + 9, 22, c.col, "sans-serif", CENTER);
+    if (wires.done[i]) {
+      let j = wires.right.indexOf(wires.left[i]);
+      wireLine(x, y, plugPos(j)[0] - 30, plugPos(j)[1], c.col);
+    } else if (i == held) {
+      wireLine(x, y, mouseX, mouseY, c.col);
+      fill("#c98a4b");
+      circle(mouseX, mouseY, 18); // the copper tip
+    } else {
+      let hot = !all && dist(mouseX, mouseY, x, y) < 36;
+      if (hot) hovering = true;
+      if (i == wires.sel) {
+        fill(255, 230, 120, 120);
+        circle(x, y, 54);
+      }
+      fill("#c98a4b");
+      circle(x, y, hot ? 26 : 20);
+      stroke(255, 120);
+      strokeWeight(2);
+      line(x + 8, y - 6, x + 18, y - 12); // frayed copper strands
+      line(x + 9, y, x + 20, y);
+      line(x + 8, y + 6, x + 18, y + 12);
+      noStroke();
+      strokeWeight(1);
+    }
+  }
+
+  // clicking: pick up a wire, then click its plug
+  if (click && !all) {
+    let i = wireAt();
+    if (i != -1) wires.sel = i;
+    else if (wires.sel != -1) connect(wires.sel, plugAt());
+  }
+  if (!all && wires.sel != -1 && plugAt() != -1) hovering = true;
+
+  if (all) {
+    stamp("FIXED", 640, 380, -0.15, color(40, 130, 60, 230), 44);
+    if (noteButton(wires.back == "gear" ? "Next night →" : "Back to the map →", 940, 640, 290, 66)) finishWires();
+  } else {
+    stickyNote(1070, 440, 200, 170, 0.03, wires.sel != -1 ? "Now click the plug that matches." : "Drag each wire to the plug that matches.");
+  }
+}
+
+// The camera works again: back to wherever the puzzle was opened from
+function finishWires() {
+  let back = wires.back;
+  wires = null;
+  if (back == "gear") {
+    lost = -1; // the smashed camera is repaired
+    lostAt = -1;
+    nextNight(true);
+  } else {
+    loose = -1;
+    screen = "plan";
+  }
+}
+
+// On to the next night's map. Before night 4 something knocks a camera's wires loose
+// (not straight after a repair, so the player doesn't fix wires twice in a row).
+function nextNight(justRepaired = false) {
+  night++;
+  if (night == LOOSE_NIGHT && !justRepaired) {
+    loose = active()[0];
+    cameras[loose] = null;
+  }
+  screen = "plan";
+}
+
 // ---------- Saving ----------
 // The game saves itself in the browser (localStorage) whenever something changes, so a player
 // can close the tab and carry on later. It only lasts on the same device and browser.
@@ -1437,8 +1830,9 @@ function saveState() {
   let atReport = ["report", "results", "end"].includes(screen);
   return {
     version: 1,
-    screen: screen == "watch" ? "plan" : screen, // a night that was cut short starts again from the map
-    night, cameras, lost, lostAt, upgrades, clues, flags, seen,
+    // a night that was cut short starts again from the map, and a wires puzzle starts again
+    screen: screen == "watch" ? "plan" : screen == "wires" ? wires.back : screen,
+    night, cameras, lost, lostAt, upgrades, clues, flags, seen, cleaned, loose,
     pins: pins.map((p) => p.key),
     report: atReport ? { slots, links, order, results, attempts, history } : null,
   };
@@ -1478,6 +1872,8 @@ function clearSave() {
 function resumeGame(state) {
   newGame();
   ({ night, cameras, lost, lostAt, upgrades, clues, flags, seen } = state);
+  cleaned = state.cleaned || [];
+  loose = state.loose == undefined ? -1 : state.loose;
   pins = state.pins.map((key) => {
     let [n, p, f] = key.split("-").map(Number);
     return { key, pic: photos[n][p][f] };
@@ -1502,6 +1898,11 @@ function newGame() {
   flags = [];
   seen = [];
   pins = [];
+  cleaned = [];
+  loose = -1;
+  wires = null;
+  if (lens) lens.g.remove();
+  lens = null;
   inspecting = false;
   help = false;
   askRestart = false;
@@ -1881,6 +2282,28 @@ function deskCamera(k) {
     noStroke();
     strokeWeight(1);
     txt("smashed", x, y + 76, 26, "#ff8a80", HAND, CENTER, BOLD);
+  } else if (k == loose) {
+    // knocked over, with its wires hanging out: click to fix it
+    if (hot) hovering = true;
+    push();
+    translate(x, y);
+    rotate(0.35 + (hot ? sin(frameCount * 0.3) * 0.04 : 0));
+    trailCamera(0, 0, hot ? 1.06 : 1, k + 1);
+    pop();
+    for (let i = 0; i < 4; i++) {
+      noFill();
+      stroke(WIRE_COLOURS[i].col);
+      strokeWeight(5);
+      bezier(x - 10 + i * 7, y + 30, x - 20 + i * 9, y + 55, x + i * 12, y + 45, x - 30 + i * 18, y + 62);
+    }
+    noStroke();
+    strokeWeight(1);
+    if (frameCount % 30 < 15) {
+      fill("#ffe066");
+      star(x + 22, y + 38, 4, 9);
+    }
+    txt("fix me!", x, y + 90, 26, "#ffd866", HAND, CENTER, BOLD);
+    if (hot && click) startWires(k, "plan");
   } else if (cameras[k] == null && !(dragging && dragging.cam == k)) {
     if (hot) hovering = true;
     trailCamera(x, y, hot ? 1.06 : 1, k + 1);
@@ -1899,6 +2322,16 @@ function deskCamera(k) {
     txt(label, x, y + 76, 24, "#d8ccb0", HAND, CENTER, BOLD);
     if (hot && click) cameras[k] = null;
   }
+}
+
+// A small star (a spark), centred at (x, y)
+function star(x, y, r1, r2) {
+  beginShape();
+  for (let a = 0; a < TWO_PI; a += PI / 5) {
+    let r = (round(a / (PI / 5)) % 2) ? r1 : r2;
+    vertex(x + cos(a - HALF_PI) * r, y + sin(a - HALF_PI) * r);
+  }
+  endShape(CLOSE);
 }
 
 // A small camouflaged trail camera, centred at (x, y), with its number on it
@@ -1953,8 +2386,9 @@ function deviceKey(iconName, label, x, y, off = false, lit = false) {
 
 // The big red FLAG button on the side of the camera. on means the photo is already flagged:
 // the button glows amber and pressing it again takes the flag back. Returns true if it was clicked.
-function flagButton(x, y, on = false) {
-  let hot = dist(mouseX, mouseY, x, y) < 58;
+function flagButton(x, y, on = false, off = false) {
+  let hot = !off && dist(mouseX, mouseY, x, y) < 58;
+  if (off) drawingContext.globalAlpha = 0.4;
   if (hot) hovering = true;
   fill(on ? "#ffb030" : 15); // an amber ring while flagged
   circle(x, y, 132);
@@ -1967,6 +2401,7 @@ function flagButton(x, y, on = false) {
   image(icons.warning, x - 16, y - 34, 32, 32);
   txt(on ? "UNFLAG" : "FLAG", x, y + 26, on ? 22 : 30, "#fff", MARKER, CENTER);
   txt(on ? "FLAGGED:\nPRESS TO UNDO" : "SOMETHING'S\nWRONG", x, y + 88, 13, "rgba(255,255,255,0.8)", TYPE, CENTER);
+  drawingContext.globalAlpha = 1;
   return hot && click;
 }
 
