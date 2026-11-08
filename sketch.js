@@ -172,6 +172,7 @@ let gear = [
   { id: "lens", name: "Zoom lens", icon: "zoom", text: "Unlocks the ZOOM key, so you can look at small details in a photo up close." },
   { id: "app", name: "Photo matcher", icon: "compare", text: "Unlocks the COMPARE key: your photo side by side with older photos of the same place." },
   { id: "motion", name: "Motion sensor log", icon: "pin", text: "Each evening the map shows where something moved last night at spots you didn't watch." },
+  { id: "scope", name: "Field ID scope", icon: "eye", text: "Point at anything in a photo to outline it and see what it is." },
 ];
 const REPAIR = { id: "repair", name: "Repair kit", icon: "camera", text: "Rewire the smashed camera so you have 2 cameras again tonight." };
 
@@ -273,7 +274,7 @@ function setup() {
   for (let a of archive) a.pic = loadPic("assets/photos/" + a.file + "-frame-1.jpg", 800, 500);
   for (let n = 1; n <= NIGHTS; n++) maps[n] = loadPic("assets/map/night-" + n + ".jpg", 1720, 1200);
   titlePic = loadPic("assets/screens/title-background.jpg", 1920, 1080);
-  for (let name of ["left", "right", "zoom", "pin", "compare", "warning", "camera"]) {
+  for (let name of ["left", "right", "zoom", "pin", "compare", "warning", "camera", "eye"]) {
     icons[name] = loadPic("assets/ui/icons/" + name + "-light.png", 96, 96);
   }
   makeTextures();
@@ -685,20 +686,23 @@ function drawReview() {
   rect(60, 80, 688, 440, 18);
   fill(0);
   rect(84, 100, 640, 400);
+  views = [];
   if (comparing) {
     // the current photo and an earlier one side by side
     let e = list[earlier];
-    drawPhoto(currentPic(), 84, 200, 318, 199);
-    drawPhoto(e.pic, 406, 200, 318, 199);
+    drawPhoto(currentPic(), 84, 200, 318, 199, currentKey());
+    drawPhoto(e.pic, 406, 200, 318, 199, e.key);
     screenText("NOW · NIGHT " + night, 94, 190);
     screenText("THEN · " + e.title.toUpperCase(), 416, 190);
     screenText(e.note, 94, 440, 24, 620);
   } else {
-    drawPhoto(currentPic(), 84, 100, 640, 400);
+    drawPhoto(currentPic(), 84, 100, 640, 400, currentKey());
     drawLens();
   }
   image(scanlines, 84, 100);
   let dirty = isDirty();
+  // the Field ID scope outlines whatever is under the mouse (not through a dirty lens)
+  if (has("scope") && !dirty && !help && !askRestart) drawScope();
   // the information along the top and bottom of the screen
   if (frameCount % 60 < 40) {
     fill("#ff4a3d");
@@ -769,9 +773,12 @@ function drawGear() {
     nextNight();
     return;
   }
+  // up to 3 cards fit at full size; with 4 they are spaced closer and shrunk to fit
+  let dx = min(380, 1200 / left.length);
+  let s = min(1, (dx - 20) / 320);
   for (let i = 0; i < left.length; i++) {
-    let x = 640 + (i - (left.length - 1) / 2) * 380;
-    if (gearCard(left[i], x, 320, i % 2 ? 0.02 : -0.02)) {
+    let x = 640 + (i - (left.length - 1) / 2) * dx;
+    if (gearCard(left[i], x, 320, i % 2 ? 0.02 : -0.02, s)) {
       if (left[i] == REPAIR) {
         startWires(lost, "gear"); // fix it first; the puzzle goes on to the next night
       } else {
@@ -1280,6 +1287,11 @@ function currentPic() {
   return photos[night][cameras[current]][frame[current]];
 }
 
+// The name of the photo on screen, e.g. "N2-farm-1" (used to look up its outlines)
+function currentKey() {
+  return "N" + night + "-" + ids[cameras[current]] + "-" + (frame[current] + 1);
+}
+
 // Earlier photos of the place the current camera is at, newest first:
 // the player's own photos from earlier nights, then Dr. Okafor's
 function earlierPhotos() {
@@ -1287,12 +1299,12 @@ function earlierPhotos() {
   let list = [];
   for (let n = night - 1; n >= 1; n--) {
     if (seen.includes(n + "-" + place)) {
-      list.push({ pic: photos[n][place][0], title: "Night " + n, note: "YOUR PHOTO FROM NIGHT " + n });
+      list.push({ pic: photos[n][place][0], key: "N" + n + "-" + ids[place] + "-1", title: "Night " + n, note: "YOUR PHOTO FROM NIGHT " + n });
     }
   }
   for (let i = archive.length - 1; i >= 0; i--) {
     let a = archive[i];
-    if (a.place == place) list.push({ pic: a.pic, title: "Okafor " + a.when, note: a.note.replace("Dr. Okafor's photo: ", "").toUpperCase() });
+    if (a.place == place) list.push({ pic: a.pic, key: a.file, title: "Okafor " + a.when, note: a.note.replace("Dr. Okafor's photo: ", "").toUpperCase() });
   }
   return list;
 }
@@ -1439,6 +1451,236 @@ function ending(proven) {
       : "Not enough evidence. The building carries on.";
   if (jumped) s += " Linking photos to false claims made them doubt parts of your report.";
   return s;
+}
+
+// ---------- Field ID scope ----------
+// A supply drop perk. Pointing at something in a photo draws a white outline around it,
+// with its name and (for living things) its scientific name.
+
+// What each kind of thing is called: [name, the line underneath]
+const SPECIES = {
+  fox: ["Red fox", "Vulpes vulpes"],
+  doe: ["White-tailed deer, doe", "Odocoileus virginianus"],
+  fawn: ["White-tailed deer, fawn", "Odocoileus virginianus"],
+  buck: ["White-tailed deer, buck", "Odocoileus virginianus"],
+  otter: ["Eurasian otter", "Lutra lutra"],
+  badger: ["European badger", "Meles meles"],
+  dog: ["Farm dog", "Canis familiaris"],
+  worker: ["Road crew worker", "Homo sapiens"],
+  hunter: ["Person with headlamp", "Homo sapiens"],
+  hand: ["Gloved hand", "Homo sapiens"],
+  snare: ["Wire snare", "illegal trap · steel wire"],
+  holes: ["Stake holes", "where the snare was"],
+  fence: ["New fence", "steel mesh · man-made"],
+  coop: ["Hen house", "timber and wire · man-made"],
+  bins: ["Rubbish bins", "plastic · man-made"],
+  crewTruck: ["Ridgeline Developments truck", "construction vehicle"],
+  pickup: ["Dark pickup truck", "roof light bar, dented tailgate"],
+  glare: ["Headlights", "a vehicle on the ridge"],
+};
+
+// The outline of everything in each photo, traced by hand in the photo's 800x500 pixels:
+// OUTLINES["N2-farm-1"] lists [kind, x1, y1, x2, y2, ...]. Photos that don't exist yet have none.
+const COOP = ["coop", 500, 215, 535, 180, 600, 180, 625, 215, 740, 225, 740, 330, 500, 330];
+const BINS = ["bins", 488, 335, 605, 330, 612, 342, 618, 330, 728, 330, 725, 455, 715, 465, 600, 470, 497, 470];
+const BINS_KNOCKED = ["bins", 478, 395, 545, 385, 628, 385, 632, 330, 735, 330, 732, 430, 690, 440, 620, 472, 478, 472];
+const CORRIDOR_FENCE = ["fence", 385, 200, 400, 188, 470, 188, 500, 183, 775, 183, 775, 282, 470, 287, 385, 287];
+const FINISHED_FENCE = ["fence", 60, 188, 100, 183, 360, 183, 400, 188, 760, 183, 760, 290, 60, 290];
+const CREEK_SNARE = ["snare", 378, 340, 400, 338, 410, 380, 455, 383, 462, 343, 478, 343, 482, 405, 470, 425, 400, 425, 380, 405];
+const OUTLINES = {
+  "N1-forest-1": [
+    ["fox", 150, 395, 175, 350, 230, 320, 300, 305, 370, 300, 385, 275, 400, 282, 408, 300, 432, 330, 415, 340, 395, 345, 380, 400, 345, 400, 330, 370, 300, 375, 290, 400, 250, 398, 240, 370, 205, 385, 170, 400],
+    ["doe", 505, 295, 520, 265, 545, 225, 575, 205, 640, 195, 668, 205, 680, 240, 670, 330, 655, 330, 645, 265, 620, 260, 600, 330, 585, 330, 570, 270, 545, 265, 525, 305],
+    ["fawn", 430, 300, 445, 265, 470, 250, 505, 255, 515, 275, 510, 330, 498, 330, 490, 295, 465, 300, 450, 330, 440, 328],
+  ],
+  "N1-forest-2": [
+    ["fox", 380, 410, 400, 370, 450, 330, 520, 310, 600, 300, 615, 280, 635, 290, 640, 315, 660, 335, 640, 345, 620, 350, 600, 400, 580, 420, 560, 400, 520, 385, 500, 420, 470, 420, 455, 395, 420, 410],
+    ["doe", 525, 185, 545, 185, 565, 195, 560, 220, 600, 225, 650, 230, 660, 250, 650, 300, 640, 330, 625, 330, 620, 290, 580, 285, 565, 330, 550, 330, 545, 270, 535, 230, 528, 210],
+    ["fawn", 440, 255, 455, 250, 460, 270, 495, 275, 500, 300, 495, 330, 485, 330, 480, 305, 460, 305, 455, 330, 445, 330, 447, 290],
+  ],
+  "N1-creek-1": [
+    ["doe", 335, 360, 340, 330, 365, 280, 395, 230, 430, 210, 500, 210, 520, 220, 525, 260, 505, 300, 510, 355, 495, 358, 480, 300, 440, 300, 415, 355, 400, 358, 385, 310, 360, 345, 350, 368],
+    ["fawn", 540, 355, 545, 335, 565, 300, 590, 280, 640, 275, 655, 290, 658, 360, 645, 360, 635, 320, 600, 322, 590, 360, 578, 360, 570, 330, 555, 355],
+    ["otter", 150, 300, 160, 285, 200, 282, 240, 287, 248, 297, 230, 305, 170, 306],
+  ],
+  "N1-creek-2": [
+    ["doe", 355, 195, 372, 198, 390, 195, 388, 225, 400, 240, 470, 240, 500, 255, 505, 300, 500, 360, 488, 362, 480, 320, 440, 315, 415, 360, 400, 362, 390, 320, 375, 280, 365, 240, 360, 215],
+    ["fawn", 540, 355, 545, 335, 565, 300, 590, 280, 640, 275, 655, 290, 658, 360, 645, 360, 635, 320, 600, 322, 590, 360, 578, 360, 570, 330, 555, 355],
+  ],
+  "N1-corridor-1": [
+    ["fox", 415, 345, 430, 310, 470, 285, 530, 275, 580, 265, 595, 248, 610, 258, 625, 295, 605, 300, 600, 320, 620, 360, 605, 362, 580, 330, 540, 340, 520, 360, 500, 360, 490, 330, 455, 345, 430, 350],
+    ["badger", 205, 410, 215, 375, 240, 360, 290, 360, 320, 375, 332, 392, 320, 405, 300, 415, 270, 425, 225, 425],
+  ],
+  "N1-corridor-2": [
+    ["buck", 310, 150, 370, 150, 368, 185, 355, 210, 390, 215, 500, 215, 530, 225, 540, 270, 530, 290, 550, 365, 535, 365, 505, 300, 470, 300, 465, 365, 440, 365, 430, 300, 395, 300, 370, 360, 350, 362, 365, 290, 345, 260, 320, 245, 300, 230, 315, 200, 320, 175],
+  ],
+  "N1-farm-1": [
+    ["dog", 380, 385, 400, 350, 420, 320, 470, 310, 510, 295, 535, 285, 548, 300, 535, 330, 510, 340, 500, 390, 480, 390, 470, 355, 440, 355, 430, 390, 410, 390, 400, 370],
+    COOP, BINS,
+  ],
+  "N1-ridge-1": [
+    ["crewTruck", 258, 240, 300, 230, 380, 215, 410, 195, 550, 192, 565, 215, 665, 220, 660, 330, 620, 355, 580, 345, 370, 340, 330, 358, 290, 345, 258, 300],
+    ["worker", 185, 215, 205, 195, 220, 210, 250, 240, 262, 265, 255, 300, 235, 300, 240, 395, 170, 395, 165, 240],
+    ["worker", 665, 210, 690, 195, 705, 205, 740, 240, 755, 290, 760, 395, 690, 395, 655, 300, 650, 250],
+  ],
+  "N2-forest-1": [
+    ["doe", 510, 195, 530, 192, 545, 205, 555, 230, 530, 235, 515, 275, 505, 300, 525, 360, 510, 362, 490, 310, 460, 300, 445, 360, 425, 362, 430, 310, 400, 300, 370, 300, 355, 280, 365, 255, 400, 240, 480, 235, 505, 215],
+    ["fawn", 240, 355, 260, 315, 290, 300, 325, 295, 335, 275, 352, 285, 355, 300, 345, 315, 340, 360, 325, 362, 315, 330, 290, 330, 275, 362, 255, 365],
+  ],
+  "N2-creek-1": [CREEK_SNARE],
+  "N2-creek-2": [
+    CREEK_SNARE,
+    ["doe", 500, 195, 520, 190, 530, 210, 545, 245, 620, 245, 650, 265, 645, 300, 645, 360, 630, 362, 625, 320, 570, 315, 560, 365, 545, 365, 535, 315, 520, 275, 505, 240],
+    ["fawn", 650, 265, 665, 260, 670, 280, 715, 285, 720, 310, 715, 355, 700, 355, 695, 330, 670, 330, 662, 355, 650, 355, 655, 310],
+  ],
+  "N2-corridor-1": [
+    ["badger", 300, 385, 310, 355, 340, 338, 400, 345, 420, 365, 425, 375, 405, 390, 330, 395],
+    CORRIDOR_FENCE,
+  ],
+  "N2-corridor-2": [
+    ["badger", 180, 380, 195, 362, 235, 350, 285, 355, 305, 385, 290, 400, 200, 400],
+    CORRIDOR_FENCE,
+  ],
+  "N2-farm-1": [
+    ["fox", 355, 410, 375, 370, 420, 320, 470, 295, 530, 290, 580, 300, 615, 345, 630, 370, 615, 385, 560, 385, 540, 420, 500, 420, 470, 410, 430, 405, 395, 420, 370, 425],
+    COOP, BINS_KNOCKED,
+  ],
+  "N2-farm-2": [
+    ["fox", 250, 440, 270, 400, 310, 370, 350, 345, 400, 330, 440, 300, 445, 262, 465, 280, 490, 262, 510, 290, 500, 335, 490, 445, 465, 450, 450, 400, 400, 410, 360, 450, 330, 445, 320, 415, 285, 440],
+    COOP, BINS_KNOCKED,
+  ],
+  "N2-ridge-1": [
+    ["pickup", 210, 250, 260, 235, 300, 215, 340, 195, 420, 185, 510, 195, 540, 240, 605, 280, 590, 360, 540, 365, 450, 385, 400, 385, 345, 350, 250, 370, 215, 345],
+  ],
+  "N2-ridge-2": [
+    ["hand", 20, 240, 100, 225, 150, 250, 110, 100, 150, 90, 260, 170, 255, 20, 300, 10, 360, 180, 450, 20, 500, 30, 500, 220, 620, 200, 740, 175, 790, 200, 800, 500, 330, 500, 250, 420, 80, 320, 15, 270],
+  ],
+  "N3-creek-1": [
+    ["hunter", 480, 280, 500, 268, 520, 278, 550, 290, 585, 310, 600, 350, 600, 395, 560, 420, 500, 420, 470, 410, 465, 370, 480, 340, 475, 300],
+    ["snare", 378, 338, 398, 338, 405, 385, 455, 378, 462, 352, 470, 360, 465, 402, 395, 404, 380, 395],
+  ],
+  "N3-creek-2": [
+    ["holes", 375, 425, 400, 412, 455, 410, 480, 422, 460, 440, 395, 440],
+  ],
+  "N3-corridor-1": [
+    ["doe", 415, 280, 440, 265, 495, 260, 505, 240, 500, 215, 512, 208, 525, 220, 538, 210, 545, 225, 535, 250, 530, 275, 515, 395, 500, 398, 495, 340, 445, 340, 440, 398, 425, 398, 415, 330],
+    ["fawn", 265, 355, 285, 330, 330, 328, 355, 315, 375, 318, 385, 330, 365, 340, 355, 390, 340, 395, 330, 360, 300, 360, 285, 395, 270, 395],
+    FINISHED_FENCE,
+  ],
+  "N3-corridor-2": [
+    ["doe", 318, 265, 335, 240, 345, 215, 365, 212, 372, 240, 380, 265, 470, 275, 520, 300, 525, 330, 545, 395, 530, 398, 500, 345, 460, 350, 430, 395, 410, 398, 420, 350, 400, 320, 380, 345, 355, 398, 340, 396, 365, 330, 350, 290],
+    ["fawn", 535, 330, 548, 312, 560, 325, 610, 330, 645, 345, 658, 395, 645, 398, 630, 370, 590, 370, 575, 398, 560, 398, 560, 360, 545, 345],
+    FINISHED_FENCE,
+  ],
+  "N3-farm-1": [
+    ["doe", 215, 250, 230, 215, 300, 210, 350, 220, 390, 245, 420, 300, 450, 345, 455, 385, 430, 390, 410, 370, 400, 385, 385, 390, 380, 340, 350, 320, 320, 330, 295, 385, 280, 385, 285, 340, 265, 330, 250, 385, 230, 385, 235, 330, 218, 290],
+    ["fawn", 130, 330, 150, 305, 185, 300, 215, 310, 240, 335, 250, 380, 235, 385, 225, 360, 200, 360, 185, 390, 170, 390, 160, 350, 140, 390, 130, 388],
+    COOP, BINS,
+  ],
+  "N3-farm-2": [
+    ["doe", 380, 215, 388, 195, 400, 205, 405, 235, 385, 250, 370, 290, 380, 385, 365, 388, 355, 340, 320, 340, 310, 385, 295, 388, 295, 330, 275, 300, 280, 260, 320, 255, 360, 250, 370, 230],
+    ["fawn", 160, 330, 175, 315, 200, 320, 220, 318, 235, 330, 225, 388, 210, 388, 205, 360, 185, 360, 180, 390, 165, 390],
+    COOP, BINS,
+  ],
+  "N3-ridge-1": [
+    ["pickup", 240, 215, 255, 190, 430, 188, 440, 210, 450, 245, 455, 330, 445, 385, 410, 385, 400, 370, 280, 370, 265, 385, 230, 385, 225, 330, 230, 245],
+  ],
+  "ARC-1": [
+    ["fox", 305, 250, 325, 262, 345, 248, 360, 250, 365, 290, 380, 300, 440, 305, 480, 320, 510, 350, 535, 395, 510, 405, 470, 395, 445, 385, 400, 385, 375, 370, 372, 395, 355, 395, 340, 370, 330, 395, 320, 392, 310, 310, 300, 290],
+  ],
+  "ARC-2": [
+    ["doe", 370, 290, 385, 262, 430, 255, 520, 250, 540, 225, 548, 205, 560, 215, 585, 240, 565, 250, 545, 265, 530, 300, 555, 385, 545, 390, 510, 330, 490, 320, 470, 388, 455, 390, 460, 330, 420, 320, 395, 388, 380, 388, 390, 330],
+    ["fawn", 225, 330, 245, 315, 290, 320, 315, 305, 320, 290, 335, 285, 348, 300, 335, 320, 320, 350, 330, 390, 315, 392, 300, 355, 270, 350, 250, 390, 235, 392, 240, 355],
+  ],
+  "ARC-4": [
+    ["glare", 715, 180, 735, 120, 790, 110, 800, 130, 800, 260, 760, 250, 725, 230],
+  ],
+};
+
+let views = []; // the photos drawn on the camera screen this frame, and which part of each is shown
+
+// True if the photo point (px, py) is inside the outline pts
+function inOutline(pts, px, py) {
+  let hit = false;
+  for (let i = 1, j = pts.length - 2; i < pts.length; j = i, i += 2) {
+    let [xi, yi, xj, yj] = [pts[i], pts[i + 1], pts[j], pts[j + 1]];
+    if (yi > py != yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
+// The size of an outline, so the smallest one under the mouse wins (an animal in front of a fence)
+function outlineArea(pts) {
+  let a = 0;
+  for (let i = 1, j = pts.length - 2; i < pts.length; j = i, i += 2) a += (pts[j] + pts[i]) * (pts[j + 1] - pts[i + 1]);
+  return abs(a / 2);
+}
+
+// Finds the thing under the mouse in the photos on screen and outlines it
+function drawScope() {
+  for (let v of views) {
+    if (!inside(v.x, v.y, v.w, v.h)) continue;
+    // where the mouse is in the photo's own 800x500 pixels
+    let px = v.sx + ((mouseX - v.x) * v.sw) / v.w;
+    let py = v.sy + ((mouseY - v.y) * v.sh) / v.h;
+    let hits = (OUTLINES[v.key] || []).filter((o) => inOutline(o, px, py));
+    if (hits.length == 0) return;
+    hits.sort((a, b) => outlineArea(a) - outlineArea(b));
+    outlineThing(hits[0], v);
+    return;
+  }
+}
+
+// Draws one outline as a smooth glowing white line, with its name tag above it
+function outlineThing(o, v) {
+  let toX = (x) => v.x + ((x - v.sx) * v.w) / v.sw;
+  let toY = (y) => v.y + ((y - v.sy) * v.h) / v.sh;
+  let n = (o.length - 1) / 2;
+  // keep the outline and the tag inside the photo
+  drawingContext.save();
+  drawingContext.beginPath();
+  drawingContext.rect(v.x, v.y, v.w, v.h);
+  drawingContext.clip();
+  noFill();
+  stroke(255);
+  strokeWeight(3);
+  strokeJoin(ROUND);
+  drawingContext.shadowColor = "rgba(255, 255, 255, 0.9)";
+  drawingContext.shadowBlur = 10;
+  // a closed curve through every point: the first and last points are repeated
+  // so the curve joins up smoothly. Tightness 0.4 stops it bulging out between points.
+  curveTightness(0.4);
+  beginShape();
+  for (let i = -1; i <= n + 1; i++) {
+    let k = (i + n) % n;
+    curveVertex(toX(o[1 + k * 2]), toY(o[2 + k * 2]));
+  }
+  endShape();
+  curveTightness(0);
+  shadowOff();
+  noStroke();
+  strokeWeight(1);
+
+  // the name tag, centred above the outline (or below it if there's no room)
+  let xs = [], ys = [];
+  for (let k = 0; k < n; k++) {
+    xs.push(toX(o[1 + k * 2]));
+    ys.push(toY(o[2 + k * 2]));
+  }
+  let [name, latin] = SPECIES[o[0]];
+  textFont(PIXEL);
+  textSize(26);
+  let w = textWidth(name);
+  textFont(TYPE);
+  textSize(13);
+  w = max(w, textWidth(latin)) + 24;
+  let cx = constrain((min(xs) + max(xs)) / 2, v.x + w / 2 + 4, v.x + v.w - w / 2 - 4);
+  let top = min(ys) - 58 > v.y + 4 ? min(ys) - 58 : min(max(ys) + 8, v.y + v.h - 54);
+  fill(0, 0, 0, 170);
+  rect(cx - w / 2, top, w, 50, 6);
+  txt(name, cx, top + 23, 26, "#ffffff", PIXEL, CENTER);
+  txt(latin, cx, top + 41, 13, "rgba(255,255,255,0.8)", TYPE, CENTER, ITALIC);
+  drawingContext.restore();
 }
 
 // ---------- Mini game: clean the lens ----------
@@ -2076,14 +2318,14 @@ function noteButton(label, x, y, w, h, col = STICKY, rot = -0.02, off = false) {
   return hot && click;
 }
 
-// A gear card in the supply drop. Returns true if it was clicked.
-function gearCard(g, x, y, rot) {
-  let hot = inside(x - 160, y - 180, 320, 360);
+// A gear card in the supply drop, drawn at scale s. Returns true if it was clicked.
+function gearCard(g, x, y, rot, s = 1) {
+  let hot = inside(x - 160 * s, y - 180 * s, 320 * s, 360 * s);
   if (hot) hovering = true;
   push();
   translate(x, y);
   rotate(rot);
-  if (hot) scale(1.04);
+  scale(hot ? s * 1.04 : s);
   shadowOn(hot ? 22 : 12);
   fill(250);
   rect(-160, -180, 320, 360, 4);
@@ -2094,7 +2336,7 @@ function gearCard(g, x, y, rot) {
   txt(g.name, 0, 4, 30, INK, MARKER, CENTER);
   txtBox(g.text, -135, 24, 270, 150, 26, BLUE, HAND, 28);
   pop();
-  tape(x, y - 182, rot + 0.05);
+  tape(x, y - 182 * s, rot + 0.05);
   return hot && click;
 }
 
@@ -2429,16 +2671,18 @@ function screenText(s, x, y, size = 26, w = 0, align = LEFT, col = SCREEN) {
 
 // A camera photo with night-vision grain.
 // While inspecting, the photo zooms in 1.75 times and follows the mouse.
-function drawPhoto(pic, x, y, w, h) {
+// key names the photo (e.g. "N2-farm-1") so the Field ID scope can find what is in it.
+function drawPhoto(pic, x, y, w, h, key = "") {
+  // the part of the 800x500 photo that is shown
+  let sx = 0, sy = 0, sw = 800, sh = 500;
   if (inspecting && inside(x, y, w, h)) {
-    let sw = 800 / 1.75;
-    let sh = 500 / 1.75;
-    let sx = map(mouseX, x, x + w, 0, 800 - sw);
-    let sy = map(mouseY, y, y + h, 0, 500 - sh);
-    image(pic, x, y, w, h, sx, sy, sw, sh);
-  } else {
-    image(pic, x, y, w, h);
+    sw = 800 / 1.75;
+    sh = 500 / 1.75;
+    sx = map(mouseX, x, x + w, 0, 800 - sw);
+    sy = map(mouseY, y, y + h, 0, 500 - sh);
   }
+  image(pic, x, y, w, h, sx, sy, sw, sh);
+  views.push({ key, x, y, w, h, sx, sy, sw, sh });
   // a random part of the grain, so it flickers like a night-vision camera
   image(grain, x, y, w, h, random(1200 - w), random(750 - h), w, h);
 }
